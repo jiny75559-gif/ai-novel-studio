@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Only local application window and core events",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-destroy"]
+}

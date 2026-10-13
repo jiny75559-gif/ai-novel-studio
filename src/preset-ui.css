@@ -1,0 +1,361 @@
+.preset-entry-point {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid var(--line);
+  margin-top: 22px;
+  padding-top: 20px;
+}
+.preset-entry-point > div {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.preset-entry-point strong,
+.preset-entry-point small {
+  display: block;
+}
+.preset-entry-point small {
+  color: var(--muted);
+  margin-top: 5px;
+}
+.provider-model-discovery {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: -2px 0 18px;
+}
+.provider-model-discovery small {
+  color: var(--muted);
+  line-height: 1.6;
+}
+.revision-ready { padding:14px; border:1px solid #ccd8e9; background:#f1f5fb; border-radius:10px; margin-top:12px; }
+.revision-ready strong { font-size:13px; color:#435575; }
+.revision-ready p { margin:8px 0 12px; font-size:12px; color:#78859b; line-height:1.7; }
+.preset-dialog-host > .modal-backdrop > .modal {
+  width: min(1190px, calc(100vw - 60px));
+  max-width: none;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 24px;
+}
+.preset-dialog-host .modal > header {
+  flex-shrink: 0;
+  margin-bottom: 14px;
+}
+.preset-toolbar,
+.preset-status,
+.preset-meta,
+.preset-preview-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.preset-toolbar select {
+  flex: 1;
+  min-width: 120px;
+}
+.preset-toolbar .button {
+  white-space: nowrap;
+}
+.preset-file-input {
+  display: none;
+}
+.preset-status {
+  font-size: 12px;
+  margin: 10px 0;
+  color: var(--muted);
+}
+.preset-status > .button {
+  margin-left: auto;
+}
+.preset-feedback {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: #edf2f9;
+  color: #485a7f;
+  border-radius: 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+  max-height: 64px;
+  overflow: auto;
+}
+.preset-feedback.error {
+  background: #fff3ea;
+  color: #935d37;
+}
+.preset-meta input:first-child {
+  flex: 0 1 32%;
+  font-weight: 600;
+}
+.preset-meta input:last-child {
+  flex: 1;
+}
+.preset-tabs {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--line);
+  margin-top: 12px;
+  flex-shrink: 0;
+}
+.preset-tabs button {
+  border: 0;
+  background: transparent;
+  padding: 11px 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.preset-tabs .active {
+  color: #46567d;
+  border-bottom: 2px solid #65759d;
+}
+.preset-body {
+  flex: 1;
+  min-height: 150px;
+  height: 370px;
+  overflow: hidden;
+}
+.preset-entry-layout {
+  display: grid;
+  grid-template-columns: 285px minmax(0, 1fr);
+  height: 100%;
+}
+.preset-order-panel {
+  border-right: 1px solid var(--line);
+  padding: 14px 14px 14px 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 9px;
+}
+.preset-order-heading strong {
+  font-size: 13px;
+}
+.preset-order-heading small {
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.preset-order-heading select {
+  margin-top: 8px;
+}
+.preset-order-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 60px;
+}
+.preset-order-row {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  min-height: 55px;
+  margin-bottom: 3px;
+  padding: 3px;
+  gap: 5px;
+}
+.preset-order-row.selected {
+  border-color: #ced6e7;
+  background: #f0f3fa;
+}
+.preset-order-row.disabled .preset-select-entry {
+  opacity: 0.55;
+}
+.preset-order-row > input {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: #67799f;
+}
+.preset-drag {
+  cursor: grab;
+  color: #9da7b7;
+}
+.preset-order-row button {
+  background: transparent;
+  border: 0;
+}
+.preset-select-entry {
+  flex: 1;
+  text-align: left;
+  padding: 4px 2px;
+  min-width: 0;
+}
+.preset-select-entry strong {
+  display: block;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.preset-select-entry small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.preset-move-buttons {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.preset-move-buttons button {
+  height: 21px;
+  width: 20px;
+  color: #6e7e9e;
+}
+.preset-move-buttons button:disabled {
+  opacity: 0.3;
+}
+.preset-entry-editor {
+  padding: 16px 0 16px 22px;
+  overflow: auto;
+}
+.preset-entry-editor .field {
+  margin-bottom: 12px;
+}
+.preset-prompt-text {
+  height: 150px;
+  min-height: 100px;
+  line-height: 1.7;
+  font-size: 13px;
+  resize: vertical;
+}
+.preset-data-description {
+  background: #f6f7fb;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 15px;
+}
+.preset-data-description p {
+  font-size: 12px;
+  line-height: 1.9;
+  color: #67738a;
+}
+.preset-triggers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+.preset-triggers > span {
+  width: 100%;
+  color: var(--muted);
+}
+.preset-triggers label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.preset-triggers input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #67799f;
+}
+.preset-scroll-panel {
+  overflow: auto;
+  height: 100%;
+  padding: 12px 4px;
+}
+.preset-scroll-panel .form-grid {
+  margin-top: 15px;
+}
+.preset-scroll-panel textarea {
+  min-height: 65px;
+}
+.preset-scroll-panel .details p {
+  font-size: 12px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.preset-import-report {
+  border: 1px solid #ebe0ca;
+  background: #fcfaf4;
+  padding: 15px;
+  border-radius: 8px;
+  margin-top: 15px;
+}
+.preset-import-report strong {
+  font-size: 13px;
+}
+.preset-import-report p {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #8c7654;
+  margin: 8px 0;
+}
+.preset-preview-toolbar {
+  border-top: 1px solid var(--line);
+  padding-top: 13px;
+}
+.preset-preview-toolbar select:first-child {
+  width: 230px;
+}
+.preset-preview-toolbar select:nth-child(2) {
+  width: 105px;
+}
+.preset-preview-toolbar small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.preset-dialog-host .modal > footer {
+  flex-shrink: 0;
+  margin-top: 13px;
+  padding-top: 13px;
+  gap: 6px;
+}
+.preset-dialog-host .modal > footer .button {
+  white-space: nowrap;
+}
+.preset-request-preview {
+  overflow: auto;
+  flex: 1;
+  min-height: 80px;
+}
+.preset-request-preview pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.preset-request-metrics {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+@media (max-height: 800px) {
+  .preset-dialog-host > .modal-backdrop > .modal {
+    padding: 18px 22px;
+  }
+  .preset-body {
+    height: 245px;
+  }
+  .preset-dialog-host .modal > header {
+    margin-bottom: 8px;
+  }
+}
+@media (max-width: 1150px) {
+  .preset-entry-layout {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+  .preset-entry-editor {
+    padding-left: 16px;
+  }
+  .preset-dialog-host .modal > footer .button {
+    padding-left: 9px;
+    padding-right: 9px;
+    font-size: 12px;
+  }
+}
