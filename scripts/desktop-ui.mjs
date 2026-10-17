@@ -1,3 +1,4 @@
+import { version as expectedVersion } from "./qa-version.mjs";
 // Real packaged WebView2 UI; test data lives in the explicitly isolated QA directory.
 import { chromium, expect } from "@playwright/test";
 import assert from "node:assert/strict";
@@ -16,7 +17,7 @@ assert.ok(
   info.dataDir.replaceAll("\\", "/").endsWith("/work/qa-ui/data"),
   info.dataDir,
 );
-assert.equal(info.version, "0.3.1");
+assert.equal(info.version, expectedVersion);
 console.log("QA data directory verified", info.version);
 const checks = [];
 const check = (s) => {

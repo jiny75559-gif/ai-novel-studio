@@ -78,7 +78,7 @@ pub fn advice(p: &Project, base_provider: Option<&Provider>, cid: &str) -> Setti
     }
     // Show a useful recommendation even when the configured window cannot fit locked data.
     let mut roomy = p.clone();
-    roomy.settings.context_tokens = 200000;
+    roomy.settings.context_tokens = MAX_CONTEXT_TOKENS;
     if let Ok(context) = build_context(&roomy, cid) {
         if let Ok(input) = largest_writing_request(&roomy, cid, &context) {
             let total = input.saturating_add(provider.max_tokens);

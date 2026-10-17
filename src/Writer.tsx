@@ -708,6 +708,15 @@ export function Writer({
                       {r.inputTokens + r.outputTokens > 0 &&
                         `· ${r.inputTokens + r.outputTokens} tokens（服务商返回）`}
                     </small>
+                    {(r.inputTokens > 0 || r.outputTokens > 0) && (
+                      <small>
+                        输入 {r.inputTokens} · 输出 {r.outputTokens}
+                        {(r.reasoningTokens ?? 0) > 0
+                          ? ` · 推理 ${r.reasoningTokens}`
+                          : ""}{" "}
+                        tokens
+                      </small>
+                    )}
                     {r.error && (
                       <p className="task-error">{r.error.userMessage}</p>
                     )}
@@ -762,6 +771,18 @@ export function Writer({
                         <Button onClick={() => void actions.run(r.task, r.id)}>
                           <RotateCcw size={13} />
                           从未完成场景恢复
+                        </Button>
+                      )}
+                    {["failed", "cancelled", "interrupted"].includes(
+                      r.status,
+                    ) &&
+                      r.task === "remember" && (
+                        <Button
+                          disabled={!chapter || !approved(chapter)}
+                          onClick={() => void actions.run("remember")}
+                        >
+                          <RotateCcw size={13} />
+                          重新提取摘要与记忆
                         </Button>
                       )}
                     {r.status === "running" && (

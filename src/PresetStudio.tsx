@@ -21,6 +21,7 @@ import type {
   PromptEntry,
   WritingPreset,
 } from "./domain";
+import { MAX_OUTPUT_TOKENS } from "./domain";
 import {
   Badge,
   Button,
@@ -822,7 +823,7 @@ export function PresetStudio({
                       "maxTokens",
                       "单次输出上限 / tokens",
                       256,
-                      32768,
+                      MAX_OUTPUT_TOKENS,
                       256,
                     )}
                     {parameterField(

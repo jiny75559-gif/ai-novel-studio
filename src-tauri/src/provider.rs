@@ -87,10 +87,11 @@ pub fn connection_endpoint(p: &Provider) -> Result<url::Url> {
         ));
     }
     if p.name.trim().is_empty()
-        || !(256..=32768).contains(&p.max_tokens)
+        || !(256..=MAX_OUTPUT_TOKENS).contains(&p.max_tokens)
         || !(10..=600).contains(&p.timeout_seconds)
         || !["max_tokens", "max_completion_tokens", "none"].contains(&p.token_parameter.as_str())
         || p.temperature.is_some_and(|t| !(0.0..=2.0).contains(&t))
+        || !["auto", "enabled", "disabled"].contains(&p.thinking_mode.as_str())
     {
         return Err(AppError::new(
             "VALIDATION",
@@ -208,6 +209,60 @@ pub struct Completion {
     pub finish_reason: String,
     pub input_tokens: usize,
     pub output_tokens: usize,
+    pub reasoning_tokens: usize,
+    pub has_reasoning: bool,
+}
+
+impl Completion {
+    pub fn require_answer(&self) -> Result<()> {
+        if !self.text.trim().is_empty() {
+            return Ok(());
+        }
+        let message = if self.finish_reason == "length" {
+            let usage = if self.output_tokens > 0 {
+                if self.reasoning_tokens > 0 {
+                    format!(
+                        "服务商报告输出 {} tokens、推理 {} tokens",
+                        self.output_tokens, self.reasoning_tokens
+                    )
+                } else {
+                    format!("服务商报告输出 {} tokens", self.output_tokens)
+                }
+            } else {
+                "服务商未报告输出用量".into()
+            };
+            format!("模型因长度限制结束，尚未返回最终正文（{usage}）。请核对 API 配置的输出上限和模型容量，或在支持时关闭思考后手动重试；增大上下文不会增加输出预算。")
+        } else if self.has_reasoning {
+            "模型只返回了推理内容，没有最终正文；推理不会写入正文或记忆。请检查思考模式与输出上限，手动重试。".into()
+        } else {
+            "模型返回空的最终正文。若开启了 JSON object，可关闭该选项后手动重试；空响应不会作为成功结果提交。".into()
+        };
+        Err(AppError::new(
+            if self.finish_reason == "length" {
+                "OUTPUT_TRUNCATED"
+            } else if self.has_reasoning {
+                "REASONING_ONLY"
+            } else {
+                "EMPTY_RESPONSE"
+            },
+            &message,
+        ))
+    }
+}
+
+pub fn official_deepseek(p: &Provider) -> bool {
+    url::Url::parse(&p.base_url).is_ok_and(|url| url.host_str() == Some("api.deepseek.com"))
+}
+
+// Automatic mode changes only structured extraction on the official endpoint.
+// Ordinary writing retains the service default; other providers receive no extra field.
+pub fn thinking_type(p: &Provider, structured: bool) -> Option<&str> {
+    match p.thinking_mode.as_str() {
+        "enabled" => Some("enabled"),
+        "disabled" => Some("disabled"),
+        _ if structured && official_deepseek(p) => Some("disabled"),
+        _ => None,
+    }
 }
 
 pub async fn complete(
@@ -236,13 +291,18 @@ pub async fn complete_with_parameters(
     parameters: &crate::presets::PresetParameters,
     cancel: &CancellationToken,
 ) -> Result<Completion> {
+    let response = request_completion(p, key, messages, json_output, parameters, cancel).await?;
+    response.require_answer()?;
+    Ok(response)
+}
+
+pub fn completion_body(
+    p: &Provider,
+    messages: Vec<Message>,
+    json_output: bool,
+    parameters: &crate::presets::PresetParameters,
+) -> Result<Value> {
     parameters.validate()?;
-    let url = endpoint(p)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(p.timeout_seconds))
-        .build()
-        .map_err(|_| AppError::new("NETWORK", "网络客户端初始化失败。"))?;
     let mut body = json!({"model":p.model_id,"messages":messages,"stream":false});
     for (key, value) in parameters.fields().as_object().unwrap() {
         body[key] = value.clone();
@@ -256,6 +316,28 @@ pub async fn complete_with_parameters(
     if json_output && p.json_mode {
         body["response_format"] = json!({"type":"json_object"});
     }
+    if let Some(mode) = thinking_type(p, json_output) {
+        body["thinking"] = json!({"type":mode});
+    }
+    Ok(body)
+}
+
+// The task engine accounts for usage before rejecting an empty final answer.
+pub async fn request_completion(
+    p: &Provider,
+    key: &str,
+    messages: Vec<Message>,
+    json_output: bool,
+    parameters: &crate::presets::PresetParameters,
+    cancel: &CancellationToken,
+) -> Result<Completion> {
+    let url = endpoint(p)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(p.timeout_seconds))
+        .build()
+        .map_err(|_| AppError::new("NETWORK", "网络客户端初始化失败。"))?;
+    let body = completion_body(p, messages, json_output, parameters)?;
     let mut request = client.post(url).json(&body);
     if !key.is_empty() {
         request = request.bearer_auth(key);
@@ -273,7 +355,7 @@ pub async fn complete_with_parameters(
     }
     let mut bytes = Vec::new();
     loop {
-        let chunk = tokio::select! { _=cancel.cancelled()=>return Err(AppError::new("CANCELLED","任务已取消。")),r=response.chunk()=>r.map_err(|_|AppError::new("NETWORK","读取响应时连接中断。"))? };
+        let chunk = tokio::select! { _=cancel.cancelled()=>return Err(AppError::new("CANCELLED","任务已取消。")),r=response.chunk()=>r.map_err(|e|if e.is_timeout(){AppError::new("TIMEOUT","读取模型响应超时；已保留任务和已完成片段，请按服务速度调整超时后手动重试。")}else{AppError::new("NETWORK","读取响应时连接中断。")})? };
         let Some(chunk) = chunk else { break };
         if bytes.len() + chunk.len() > 5 * 1024 * 1024 {
             return Err(AppError::new("TOO_LARGE", "模型响应超过 5 MB。"));
@@ -296,17 +378,16 @@ pub async fn complete_with_parameters(
             "模型拒绝生成本次内容，请查看服务商使用规则。",
         ));
     }
-    let content = choice["message"]["content"]
-        .as_str()
-        .ok_or_else(|| AppError::new("UNSUPPORTED_RESPONSE", "该接口没有返回文本正文。"))?
-        .trim()
-        .to_string();
-    if content.is_empty() {
-        return Err(AppError::new(
-            "EMPTY_RESPONSE",
-            "模型返回空内容；没有提交正文。",
-        ));
-    }
+    let content = match &choice["message"]["content"] {
+        Value::String(text) => text.trim().to_string(),
+        Value::Null => String::new(),
+        _ => {
+            return Err(AppError::new(
+                "UNSUPPORTED_RESPONSE",
+                "该接口没有返回文本格式的最终正文。",
+            ))
+        }
+    };
     let reason = choice["finish_reason"]
         .as_str()
         .ok_or_else(|| {
@@ -321,6 +402,12 @@ pub async fn complete_with_parameters(
         finish_reason: reason,
         input_tokens: value["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize,
         output_tokens: value["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize,
+        reasoning_tokens: value["usage"]["completion_tokens_details"]["reasoning_tokens"]
+            .as_u64()
+            .unwrap_or(0) as usize,
+        has_reasoning: choice["message"]["reasoning_content"]
+            .as_str()
+            .is_some_and(|s| !s.trim().is_empty()),
     })
 }
 

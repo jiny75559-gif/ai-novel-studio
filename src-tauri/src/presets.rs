@@ -32,7 +32,9 @@ impl PresetParameters {
             || self
                 .presence_penalty
                 .is_some_and(|v| !v.is_finite() || !(-2.0..=2.0).contains(&v))
-            || self.max_tokens.is_some_and(|v| !(256..=32768).contains(&v))
+            || self
+                .max_tokens
+                .is_some_and(|v| !(256..=MAX_OUTPUT_TOKENS).contains(&v))
             || self.stop.len() > 4
             || self.stop.iter().any(|s| s.is_empty() || s.len() > 1000)
         {
@@ -995,6 +997,9 @@ pub fn apply_provider_to_preview(
     provider: &Provider,
 ) {
     preview.parameters["model"] = json!(provider.model_id);
+    if let Some(mode) = thinking_type(provider, false) {
+        preview.parameters["thinking"] = json!({"type":mode});
+    }
     if let Some(t) = provider.temperature {
         preview.parameters["temperature"] = json!(t);
     }

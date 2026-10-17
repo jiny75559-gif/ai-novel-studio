@@ -76,6 +76,6 @@ http
     res.writeHead(404);
     res.end("{}");
   })
-  .listen(8788, "127.0.0.1", () =>
-    console.log("Mock image services :8788 (test fixtures only)"),
+  .listen(8790, "127.0.0.1", () =>
+    console.log("Mock image services :8790 (test fixtures only)"),
   );

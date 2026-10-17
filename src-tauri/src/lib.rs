@@ -260,6 +260,9 @@ async fn test_provider(
     p.max_tokens = 256;
     p.temperature = None;
     p.json_mode = false;
+    if p.thinking_mode == "auto" && provider::official_deepseek(&p) {
+        p.thinking_mode = "disabled".into();
+    }
     let key = state.secrets.for_provider(&p)?;
     let response = provider::complete(
         &p,

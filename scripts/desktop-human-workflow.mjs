@@ -1,3 +1,4 @@
+import { version as expectedVersion } from "./qa-version.mjs";
 // All mutations in this test use the visible UI. Native commands only verify saved data.
 import { chromium, expect } from "@playwright/test";
 import assert from "node:assert/strict";
@@ -14,7 +15,7 @@ const api = (name, args = {}) =>
   );
 const info = await api("app_info");
 assert.ok(info.dataDir.replaceAll("\\", "/").endsWith("/work/qa-ui/data"));
-assert.equal(info.version, "0.3.1");
+assert.equal(info.version, expectedVersion);
 const checks = [];
 const check = (s) => {
   checks.push(s);

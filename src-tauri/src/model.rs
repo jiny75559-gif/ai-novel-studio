@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub const MAX_CONTEXT_TOKENS: usize = 2_000_000;
+pub const MAX_OUTPUT_TOKENS: usize = 393_216;
+
 pub fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -204,7 +207,7 @@ impl Project {
         }
         if !(200..=8000).contains(&self.settings.target_chars)
             || !(1..=6).contains(&self.settings.max_calls)
-            || !(4000..=200000).contains(&self.settings.context_tokens)
+            || !(4000..=MAX_CONTEXT_TOKENS).contains(&self.settings.context_tokens)
         {
             return Err(AppError::new(
                 "VALIDATION",
@@ -441,6 +444,7 @@ pub struct Provider {
     pub allow_local_http: bool,
     pub token_parameter: String,
     pub json_mode: bool,
+    pub thinking_mode: String,
     pub temperature: Option<f64>,
     pub max_tokens: usize,
     pub timeout_seconds: u64,
@@ -457,6 +461,7 @@ impl Default for Provider {
             allow_local_http: false,
             token_parameter: "max_tokens".into(),
             json_mode: false,
+            thinking_mode: "auto".into(),
             temperature: Some(0.7),
             max_tokens: 4096,
             timeout_seconds: 120,
@@ -521,6 +526,8 @@ pub struct Run {
     pub calls: usize,
     pub input_tokens: usize,
     pub output_tokens: usize,
+    #[serde(default)]
+    pub reasoning_tokens: usize,
     pub created_at: u64,
     pub result_version_id: String,
     pub recovered_from: String,

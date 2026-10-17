@@ -1,3 +1,4 @@
+import { version as expectedVersion } from "./qa-version.mjs";
 import { chromium, expect } from '@playwright/test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -6,7 +7,7 @@ import { writeFile } from 'node:fs/promises';
 const browser=await chromium.connectOverCDP('http://127.0.0.1:9223');
 const page=browser.contexts()[0].pages()[0];page.setDefaultTimeout(15000);
 const api=(name,args={})=>page.evaluate(({name,args})=>window.__TAURI_INTERNALS__.invoke(name,args),{name,args});
-const info=await api('app_info');assert.ok(info.dataDir.replaceAll('\\','/').endsWith('/work/qa-ui/data'));assert.equal(info.version,'0.3.1');
+const info=await api('app_info');assert.ok(info.dataDir.replaceAll('\\','/').endsWith('/work/qa-ui/data'));assert.equal(info.version, expectedVersion);
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 const checks=[];const check=s=>{checks.push(s);console.log('PASS',s);};
 const nav=name=>page.getByRole('button',{name,exact:true}).first().click();

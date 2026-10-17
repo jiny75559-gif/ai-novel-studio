@@ -1,3 +1,4 @@
+import { version as expectedVersion } from "./qa-version.mjs";
 // Verify persisted settings using the real host and visible model test buttons.
 import { chromium, expect } from '@playwright/test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ const api = (name, args = {}) => page.evaluate(
   ({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
 const info = await api('app_info');
 assert.ok(info.dataDir.replaceAll('\\', '/').endsWith('/work/qa-ui/data'));
-assert.equal(info.version, '0.3.1');
+assert.equal(info.version, expectedVersion);
 const human = JSON.parse(await readFile('../../work/qa-ui/human-workflow.json', 'utf8'));
 const snapshotFile = '../../work/qa-ui/settings-restart.json';
 const p = await api('load_project', { projectId: human.pid });

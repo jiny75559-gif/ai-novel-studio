@@ -1,3 +1,4 @@
+import { version as expectedVersion } from "./qa-version.mjs";
 import { chromium, expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import { readFile, writeFile, stat } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { resolve } from "node:path";
 const b=await chromium.connectOverCDP("http://127.0.0.1:9223"),page=b.contexts()[0].pages()[0];
 page.setDefaultTimeout(15000);
 const api=(name,args={})=>page.evaluate(({name,args})=>window.__TAURI_INTERNALS__.invoke(name,args),{name,args});
-const info=await api("app_info");assert.ok(info.dataDir.replaceAll("\\","/").endsWith("/work/qa-ui/data"));assert.equal(info.version, "0.3.1");
+const info=await api("app_info");assert.ok(info.dataDir.replaceAll("\\","/").endsWith("/work/qa-ui/data"));assert.equal(info.version, expectedVersion);
 const human=JSON.parse(await readFile("../../work/qa-ui/human-workflow.json","utf8"));
 const checks=[];const check=s=>{checks.push(s);console.log("PASS",s);};
 const dialog=()=>page.getByRole("dialog").last();
@@ -16,6 +17,10 @@ const stamp=Date.now();const dir="../../work/qa-ui/";
 const close=()=>dialog().getByRole("button",{name:"关闭对话框",exact:true}).click();
 const nav=name=>page.getByRole("button",{name,exact:true}).first().click();
 try{
+ if ((await api("list_projects",{trash:true})).some(p=>p.id===human.pid)) {
+  await nav("我的作品");await page.getByLabel("搜索作品",{exact:true}).fill(human.title);await page.getByRole("button",{name:"回收站",exact:true}).click();
+  await humanCard().getByRole("button",{name:"恢复作品",exact:true}).click();await dialog().getByRole("button",{name:"确认",exact:true}).click();await page.getByRole("button",{name:"返回作品",exact:true}).click();
+ }
  await nav("我的作品");await page.getByLabel("搜索作品",{exact:true}).fill(human.title);await humanCard().getByRole("button",{name:"移入回收站",exact:true}).click();await dialog().getByRole("button",{name:"确认",exact:true}).click();await page.getByRole("button",{name:"回收站",exact:true}).click();
  await humanCard().getByRole("button",{name:"恢复作品",exact:true}).click();await dialog().getByRole("button",{name:"确认",exact:true}).click();await page.getByRole("button",{name:"返回作品",exact:true}).click();
  await humanCard().getByRole("button",{name:"编辑作品",exact:true}).click();await expect(page.locator(".writer-layout")).toBeVisible();

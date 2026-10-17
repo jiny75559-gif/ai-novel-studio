@@ -209,7 +209,24 @@ const server = http.createServer(async (req, res) => {
     }
     content = parts.join("\n\n") + "\n\n两人走向雾中的堤岸。";
   }
-  const reason = input.model === "mock-truncated" ? "length" : "stop";
+  let reason = input.model === "mock-truncated" ? "length" : "stop";
+  let reasoning = "";
+  const memoryFixture = text.includes("MEMORY_JSON") && input.model.startsWith("mock-memory-");
+  if (memoryFixture) {
+    if (input.model === "mock-memory-reasoning-length") {
+      content = null;
+      reasoning = "TEST ONLY: internal reasoning must not become an approved fact";
+      reason = "length";
+    } else if (input.model === "mock-memory-empty") {
+      content = "";
+    } else if (input.model === "mock-memory-partial") {
+      content = '{"summary":"half JSON';
+      reason = "length";
+    } else if (input.model === "mock-memory-fenced") {
+      content = "```json\n" + content + "\n```";
+      reasoning = "TEST ONLY: ignore this reasoning";
+    }
+  }
   if (
     (input.model === "mock-timeout" && calls % 2 === 0) ||
     (input.model === "mock-scene2-timeout" &&
@@ -227,11 +244,11 @@ const server = http.createServer(async (req, res) => {
       choices: [
         {
           index: 0,
-          message: { role: "assistant", content },
+          message: { role: "assistant", content, ...(reasoning ? { reasoning_content: reasoning } : {}) },
           finish_reason: reason,
         },
       ],
-      usage: { prompt_tokens: 300, completion_tokens: content.length },
+      usage: memoryFixture ? { prompt_tokens: 5629, completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: reasoning ? 4000 : 0 } } : { prompt_tokens: 300, completion_tokens: content.length },
     }),
   );
 });

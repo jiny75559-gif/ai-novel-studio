@@ -304,6 +304,11 @@ pub fn context_for_task(p: &Project, cid: &str, task: &str) -> Result<ContextBun
     }
     let mut base = p.clone();
     base.writing_preset = None;
+    if task == "remember" {
+        // Extraction sends the confirmed source separately; a future writing
+        // target must not consume the entire context reserve for this task.
+        base.settings.target_chars = 200;
+    }
     let mut context = build_context(&base, cid)?;
     if task == "review" {
         if let Some(preset) = &p.writing_preset {

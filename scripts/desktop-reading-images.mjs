@@ -228,7 +228,7 @@ await page
   .fill("QA 云端图像（模拟）");
 await page
   .getByRole("textbox", { name: "服务地址", exact: true })
-  .fill("http://127.0.0.1:8788/v1");
+  .fill("http://127.0.0.1:8790/v1");
 await page
   .getByRole("checkbox", { name: "允许本机 HTTP", exact: false })
   .check();
@@ -266,7 +266,7 @@ await expect(page.locator(".artwork-gallery article")).toHaveCount(1, {
   timeout: 20000,
 });
 assert.equal((await load(pid)).visualProfiles[0].referenceImageId, reference);
-let stats = await (await fetch("http://127.0.0.1:8788/stats")).json();
+let stats = await (await fetch("http://127.0.0.1:8790/stats")).json();
 assert.ok(
   stats.requests.some(
     (r) => r.path === "/v1/images/edits" && r.multipartBytes > 100,
@@ -328,7 +328,7 @@ await page
   .fill("QA ComfyUI（模拟）");
 await page
   .getByRole("textbox", { name: "服务地址", exact: true })
-  .fill("http://127.0.0.1:8788");
+  .fill("http://127.0.0.1:8790");
 await page
   .getByRole("textbox", { name: "ComfyUI 工作流", exact: true })
   .fill(JSON.stringify(workflow));
@@ -337,7 +337,7 @@ await page
   .fill("10");
 await page.getByRole("button", { name: "保存生图配置", exact: true }).click();
 await expect(page.getByRole("dialog")).toHaveCount(0);
-await fetch("http://127.0.0.1:8788/control", {
+await fetch("http://127.0.0.1:8790/control", {
   method: "POST",
   body: JSON.stringify({ hold: true }),
 });
@@ -356,13 +356,13 @@ await expect
   .not.toBe("");
 await page.getByRole("button", { name: "停止等待", exact: true }).click();
 assert.equal((await waitJob(pid, j.id)).status, "cancelled");
-stats = await (await fetch("http://127.0.0.1:8788/stats")).json();
+stats = await (await fetch("http://127.0.0.1:8790/stats")).json();
 const submits = stats.requests.filter((r) => r.path === "/prompt").length;
 const submit = stats.requests.find((r) => r.path === "/prompt");
 assert.equal(submit.body.prompt["10"].inputs.image, "novel/confirmed.png");
 assert.ok(submit.body.prompt["6"].inputs.text.includes("头发变为短发"));
 assert.equal(submit.body.prompt["3"].inputs.steps, 20);
-await fetch("http://127.0.0.1:8788/control", {
+await fetch("http://127.0.0.1:8790/control", {
   method: "POST",
   body: JSON.stringify({ hold: false }),
 });
@@ -376,7 +376,7 @@ await expect
     { timeout: 15000 },
   )
   .toBe("succeeded");
-stats = await (await fetch("http://127.0.0.1:8788/stats")).json();
+stats = await (await fetch("http://127.0.0.1:8790/stats")).json();
 assert.equal(
   stats.requests.filter((r) => r.path === "/prompt").length,
   submits,

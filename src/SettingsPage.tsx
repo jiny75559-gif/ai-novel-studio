@@ -18,6 +18,8 @@ import {
   type Provider,
   type Settings,
   blankProvider,
+  MAX_CONTEXT_TOKENS,
+  MAX_OUTPUT_TOKENS,
 } from "./domain";
 import { Badge, Button, Confirm, Field, Modal, Toggle } from "./components";
 import { PresetEntryPoint } from "./PresetStudio";
@@ -321,7 +323,7 @@ export function SettingsPage({
               <input
                 type="number"
                 min={4000}
-                max={200000}
+                max={MAX_CONTEXT_TOKENS}
                 step={1000}
                 value={settings.contextTokens}
                 onChange={(e) =>
@@ -580,11 +582,14 @@ function ProviderModal({
         />
       </Field>
       <div className="form-grid">
-        <Field label="输出上限 / tokens">
+        <Field
+          label="输出上限 / tokens"
+          hint="与上下文窗口分别设置。思考模型的推理可能占用输出预算；较大上下文不会增加这里的上限。"
+        >
           <input
             type="number"
             min={256}
-            max={32768}
+            max={MAX_OUTPUT_TOKENS}
             value={p.maxTokens}
             onChange={(e) => change("maxTokens", Number(e.target.value))}
           />
@@ -631,11 +636,26 @@ function ProviderModal({
           />
         </Field>
       </div>
+      <Field
+        label="思考模式（DeepSeek 兼容参数）"
+        hint="自动：官方 DeepSeek 的摘要、审稿等结构化任务关闭思考，正文沿用服务默认；其他服务不发送此参数。显式开关仅用于支持 thinking 参数的接口，不切换模型。"
+      >
+        <select
+          value={p.thinkingMode ?? "auto"}
+          onChange={(e) =>
+            change("thinkingMode", e.target.value as Provider["thinkingMode"])
+          }
+        >
+          <option value="auto">自动适配</option>
+          <option value="enabled">开启思考</option>
+          <option value="disabled">关闭思考</option>
+        </select>
+      </Field>
       <Toggle
         checked={p.jsonMode}
         onChange={(v) => change("jsonMode", v)}
         label="接口支持 JSON object"
-        description="不确定时保持关闭。软件仍会校验审稿与记忆 JSON。"
+        description="不确定时保持关闭。软件仍会校验审稿与记忆 JSON。DeepSeek JSON 模式偶尔可能返回空正文，可关闭后手动重试。"
       />
       <Toggle
         checked={p.allowLocalHttp}

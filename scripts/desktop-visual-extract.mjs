@@ -74,7 +74,7 @@ const image = await api("save_image_config", {
     id: crypto.randomUUID(),
     name: "自动形象图 QA（测试像素）",
     mode: "cloud",
-    baseUrl: "http://127.0.0.1:8788/v1",
+    baseUrl: "http://127.0.0.1:8790/v1",
     allowLocalHttp: true,
     modelId: "mock-image",
     timeoutSeconds: 60,

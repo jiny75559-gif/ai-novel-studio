@@ -160,6 +160,8 @@ export interface ProjectCard {
   chapters: number;
   updatedAt: number;
 }
+export const MAX_CONTEXT_TOKENS = 2_000_000;
+export const MAX_OUTPUT_TOKENS = 393_216;
 export interface Provider {
   id: string;
   name: string;
@@ -168,6 +170,7 @@ export interface Provider {
   allowLocalHttp: boolean;
   tokenParameter: string;
   jsonMode: boolean;
+  thinkingMode: "auto" | "enabled" | "disabled";
   temperature: number | null;
   maxTokens: number;
   timeoutSeconds: number;
@@ -222,6 +225,7 @@ export interface Run {
   calls: number;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
   createdAt: number;
   resultVersionId: string;
   recoveredFrom: string;
@@ -413,6 +417,7 @@ export const blankProvider = (): Provider => ({
   allowLocalHttp: false,
   tokenParameter: "max_tokens",
   jsonMode: false,
+  thinkingMode: "auto",
   temperature: 0.7,
   maxTokens: 4096,
   timeoutSeconds: 120,

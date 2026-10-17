@@ -391,6 +391,7 @@ fn interrupted_run_reopens_and_relation_positions_persist() {
         }],
         error: None,
         calls: 1,
+        reasoning_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
         created_at: now(),

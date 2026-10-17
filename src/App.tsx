@@ -682,7 +682,7 @@ export function App() {
             本地工作空间
           </span>
           <small>你的故事，由你决定。</small>
-          <span className="build-version">v0.3.1 · Windows</span>
+          <span className="build-version">v0.3.2 · Windows</span>
           <button className="update-entry" onClick={() => setUpdatesOpen(true)}>软件更新</button>
         </div>
       </aside>
