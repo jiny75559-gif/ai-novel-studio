@@ -12,7 +12,11 @@ Rust 75 项（原65 + reasoning_memory 10）、Vitest6、typecheck、lint、fmt�
 
 本轮另通过 fileUI7（实际回收恢复、TXT/ZIP/预设导出与重导入、参考文风、备份、PDF）和 new-formats9（真实文件选择导入8种格式、图像/脚注、漫画自然排序与进度，无AI请求）。文件脚本增加了恢复被其他隔离测试隐藏的夹具步骤；桌面交互按串行复验。最后仅调整共用空响应提示，随后重新构建并复跑最终 EXE 的 memory7 和 reasoning_memory9，clippy 严格检查通过。
 
-另修复 reqwest 关闭默认特性后未读取 Windows 系统代理的问题：远程文字、生图和更新使用系统代理，本机 localhost/127.0.0.1/::1 服务直接连接。无代理环境变量时，最终 EXE 经 Windows 系统代理实际读取 GitHub 已发布版本成功；将测试进程 HTTP_PROXY/HTTPS_PROXY 指向失效端口且清空 NO_PROXY，reasoning_memory9 与 visual_workflow5 仍全部通过。加入此修复后，最终 EXE 重跑 human16、memory7、imageUI6 通过。跨版本更新与交付的后续验收在完成后追加。仍未使用真实付费 DeepSeek 或 ComfyUI checkpoint；没有穷尽服务商和书籍版式。签名更新沿用既有公钥/私钥；EXE 尚未 Authenticode 签名。
+另修复 reqwest 关闭默认特性后未读取 Windows 系统代理的问题：远程文字、生图和更新使用系统代理，本机 localhost/127.0.0.1/::1 服务直接连接。无代理环境变量时，最终 EXE 经 Windows 系统代理实际读取 GitHub 已发布版本成功；将测试进程 HTTP_PROXY/HTTPS_PROXY 指向失效端口且清空 NO_PROXY，reasoning_memory9 与 visual_workflow5 仍全部通过。加入此修复后，最终 EXE 重跑 human16、memory7、imageUI6 通过。跨版本实际安装：旧 v0.3.1 真正检查 GitHub v0.3.2 清单及签名成功；首次整包下载中断并保留旧软件与作品，随后通过真实 Windows 文件对话框选择正式 .nsupdate，验签后启动 NSIS、备份数据库并自动重启到 v0.3.2。工作副本、未增加的手动版本、主副配置、旧配置新增字段默认值和实际 Windows 凭据连接均通过。升级前后69条阅读状态、33258条不可变版本、57条图片ID/哈希逐项摘要一致。安装后清除测试代理环境重启，最终软件界面实际检查 GitHub 并识别 v0.3.2 已为最新版。
+
+本轮在线整包下载未验收通过：旧版下载中断，新版直接下载测试也失败；独立 Python 下载同一公开文件仅缓慢收到部分数据，未通过完整文件校验。这与在线检查/签名验证和本地包升级的成功分开记录，不据此保证所有网络均能下载。桌面已提供约38.8MiB的小型 .nsupdate 和约247.3MiB离线ZIP，两者本地副本哈希核对通过。
+
+交付时恢复正常数据目录并启动已安装 v0.3.2，安装文件与最终受测 EXE 完全一致。正常作者数据库 quick_check=ok，全部既有 projects/chapter_versions/model_configs/reader_state/media 行与任务开始时备份一致；隔离测试库完整性均通过。测试新增凭据已清除，测试服务和CDP已关闭，原插件仓库未修改。仍未使用真实付费 DeepSeek 或 ComfyUI checkpoint；没有穷尽服务商和书籍版式。签名更新沿用既有公钥/私钥；EXE 尚未 Authenticode 签名。
 
 
 ## v0.3.1 生成预算、扩展阅读格式和签名更新（2026-10-14）
