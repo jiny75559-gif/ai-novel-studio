@@ -869,8 +869,8 @@ pub fn resume_job(state: Arc<AppState>, jid: &str) -> Result<ImageJob> {
     spawn_job(state, j.clone());
     Ok(j)
 }
-fn client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+fn client(url: &url::Url) -> Result<reqwest::Client> {
+    crate::provider::client_builder(url)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(1800))
         .build()
@@ -930,7 +930,7 @@ fn b64_image(s: &str) -> Result<Media> {
 }
 async fn generate(state: &AppState, j: &mut ImageJob) -> Result<Media> {
     let c = &j.config;
-    let cli = client()?;
+    let cli = client(&endpoint(c, "")?)?;
     let key = state
         .secrets
         .get(&format!("image:{}", c.id))
@@ -981,7 +981,7 @@ async fn generate(state: &AppState, j: &mut ImageJob) -> Result<Media> {
                     "图片地址需要 HTTPS 或已允许的本机地址。",
                 ));
             }
-            return Media::from_bytes(response(cli.get(u), MAX_IMAGE).await?);
+            return Media::from_bytes(response(client(&u)?.get(u), MAX_IMAGE).await?);
         }
         return Err(AppError::new("INVALID_IMAGE", "生图服务未返回图片。"));
     }
@@ -1113,7 +1113,8 @@ pub async fn test_config(state: &AppState, c: &ImageConfig) -> Result<String> {
         .secrets
         .get(&format!("image:{}", c.id))
         .unwrap_or_default();
-    let _ = request_json(auth(client()?.get(endpoint(c, route)?), &key)).await?;
+    let url = endpoint(c, route)?;
+    let _ = request_json(auth(client(&url)?.get(url), &key)).await?;
     Ok("服务连接成功；未提交生图任务。".into())
 }
 

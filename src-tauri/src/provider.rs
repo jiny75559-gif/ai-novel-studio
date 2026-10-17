@@ -63,6 +63,20 @@ pub fn endpoint(p: &Provider) -> Result<url::Url> {
     }
     connection_endpoint(p)
 }
+
+// Respect the OS proxy for internet services. Loopback APIs must stay local,
+// including when HTTP_PROXY / HTTPS_PROXY point to an unreachable proxy.
+pub fn client_builder(url: &url::Url) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
+    if matches!(
+        url.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+    ) {
+        builder.no_proxy()
+    } else {
+        builder
+    }
+}
 pub fn connection_endpoint(p: &Provider) -> Result<url::Url> {
     let mut url = url::Url::parse(p.base_url.trim())
         .map_err(|_| AppError::new("INVALID_URL", "请输入完整的 HTTPS API 地址。"))?;
@@ -131,7 +145,7 @@ pub async fn list_models(p: &Provider, key: &str) -> Result<Vec<String>> {
             .trim_end_matches("/chat/completions")
             .trim_end_matches('/')
     ));
-    let client = reqwest::Client::builder()
+    let client = client_builder(&url)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(20))
         .build()
@@ -332,7 +346,7 @@ pub async fn request_completion(
     cancel: &CancellationToken,
 ) -> Result<Completion> {
     let url = endpoint(p)?;
-    let client = reqwest::Client::builder()
+    let client = client_builder(&url)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(p.timeout_seconds))
         .build()

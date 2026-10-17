@@ -291,3 +291,39 @@ async fn timeout_after_successful_headers_is_reported_as_timeout() {
     .await;
     assert_eq!(result.unwrap_err().code, "TIMEOUT");
 }
+
+#[tokio::test]
+async fn facts_first_large_truncation_keeps_exact_fragment_and_retry_discards_incomplete_facts() {
+    let partial = format!(
+        "{{\"facts\":[{{\"category\":\"character\",\"certainty\":\"confirmed\",\"excerpt\":\"{}",
+        "事实引文".repeat(321)
+    );
+    assert_eq!(han_count(&partial), 1284);
+    let mut truncated = response(json!(partial), "length", "");
+    truncated["usage"]["completion_tokens_details"]["reasoning_tokens"] = json!(0);
+    let m = mock(vec![
+        truncated,
+        response(
+            json!("{\"summary\":\"两人离开灯塔。\",\"facts\":[]}"),
+            "stop",
+            "",
+        ),
+    ]);
+    let (s, p) = setup(&m);
+    let failed = run_memory(&s, &p).await;
+    assert_eq!(failed.error.unwrap().code, "OUTPUT_TRUNCATED");
+    assert_eq!(failed.calls, 1);
+    assert_eq!(failed.input_tokens + failed.output_tokens, 9725);
+    assert_eq!(failed.segments[0].text, partial);
+    let saved = s.db.load(&p.id).unwrap();
+    assert!(saved.proposals.is_empty());
+    assert_eq!(saved.chapters[0].summary, p.chapters[0].summary);
+    assert_eq!(run_memory(&s, &p).await.status, "succeeded");
+    let saved = s.db.load(&p.id).unwrap();
+    assert!(saved.proposals.is_empty());
+    assert_eq!(saved.chapters[0].summary, "两人离开灯塔。");
+    assert_eq!(
+        saved.chapters[0].versions.len(),
+        p.chapters[0].versions.len()
+    );
+}
