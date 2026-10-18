@@ -23,7 +23,8 @@ const check = (s) => {
 };
 const dialog = () => page.getByRole("dialog").last();
 const nav = async (name) => {
-  await page.getByRole("button", { name, exact: true }).first().click();
+  // A pending-memory badge is included in the menu button's accessible name.
+  await page.getByRole("button", { name, exact: false }).first().click();
 };
 const closeDialog = async () =>
   dialog().getByRole("button", { name: "关闭对话框", exact: true }).click();
