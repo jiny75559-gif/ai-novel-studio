@@ -57,6 +57,7 @@ export function UpdatesPanel({
     try {
       await work();
     } catch (e) {
+      setMessage("");
       setError(errorMessage(e));
     } finally {
       setBusy(false);

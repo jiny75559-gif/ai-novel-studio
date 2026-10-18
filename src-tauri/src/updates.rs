@@ -195,7 +195,13 @@ pub fn save_update_config(
 }
 async fn fetch(url: &str, max: u64, app: Option<&tauri::AppHandle>) -> Result<Vec<u8>> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(if max <= 64 * 1024 { 20 } else { 180 }))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(45))
+        .timeout(Duration::from_secs(if max <= 64 * 1024 {
+            20
+        } else {
+            1800
+        }))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.url().scheme() != "https" || attempt.previous().len() > 5 {
                 attempt.stop()
@@ -205,6 +211,14 @@ async fn fetch(url: &str, max: u64, app: Option<&tauri::AppHandle>) -> Result<Ve
         }))
         .build()
         .map_err(|_| err("NETWORK", "无法创建更新连接。"))?;
+    fetch_with_client(&client, url, max, app).await
+}
+async fn fetch_with_client(
+    client: &reqwest::Client,
+    url: &str,
+    max: u64,
+    app: Option<&tauri::AppHandle>,
+) -> Result<Vec<u8>> {
     let mut response = client
         .get(url)
         .header("User-Agent", "NovelStudio-Updater")
@@ -244,6 +258,81 @@ async fn fetch(url: &str, max: u64, app: Option<&tauri::AppHandle>) -> Result<Ve
         }
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use std::{io::Write, net::TcpListener, thread};
+
+    fn server(parts: Vec<(&'static [u8], u64)>) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}/update", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            for (bytes, delay) in parts {
+                thread::sleep(Duration::from_millis(delay));
+                if stream.write_all(bytes).is_err() {
+                    break;
+                }
+            }
+        });
+        (address, handle)
+    }
+
+    fn client(read_ms: u64) -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .read_timeout(Duration::from_millis(read_ms))
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn progressing_download_keeps_all_bytes_across_reads() {
+        let (url, handle) = server(vec![
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nab", 0),
+            (b"cd", 80),
+            (b"ef", 80),
+        ]);
+        let bytes = fetch_with_client(&client(500), &url, 6, None)
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"abcdef");
+        handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_download_fails_without_returning_partial_package() {
+        let (url, handle) = server(vec![
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nab", 0),
+            (b"cdef", 600),
+        ]);
+        let error = fetch_with_client(&client(100), &url, 6, None)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "NETWORK");
+        assert!(error.user_message.contains("下载中断"));
+        handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_stream_is_rejected_without_trusting_headers() {
+        let (url, handle) = server(vec![(
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nabcdefg",
+            0,
+        )]);
+        let error = fetch_with_client(&client(500), &url, 6, None)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "UPDATE_INVALID");
+        handle.join().unwrap();
+    }
 }
 #[tauri::command]
 pub async fn check_update(
