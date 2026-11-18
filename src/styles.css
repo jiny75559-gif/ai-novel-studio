@@ -108,6 +108,9 @@ small {
   min-height: 700px;
   overflow: hidden;
 }
+.reading-shell.app-shell {
+  min-height: 0;
+}
 .sidebar {
   width: 205px;
   min-width: 205px;
@@ -116,6 +119,7 @@ small {
   display: flex;
   flex-direction: column;
   padding: 30px 17px 20px;
+  overflow-y: auto;
 }
 .brand {
   display: flex;

@@ -160,6 +160,35 @@ fn large_txt_thousands_of_chapters_and_single_long_section_keep_all_text() {
     );
 }
 #[test]
+fn pdf_annotation_pages_export_and_known_page_limit() {
+    let (mut p, _) = pdf_document(Path::new("tests/fixtures/illustrated.pdf")).unwrap();
+    let rect = |page| PdfRect {
+        page,
+        x: 0.1,
+        y: 0.2,
+        width: 0.1,
+        height: 0.2,
+    };
+    let mut mark = ReadingMark {
+        pdf_rects: vec![rect(3), rect(1), rect(3)],
+        ..ReadingMark::default()
+    };
+    upsert(&mut p, mark.clone()).unwrap();
+    assert!(export_notes(&p).contains("## PDF 第 1、3 页\n"));
+    p.reader.total_pages = 2;
+    mark.note = "保留已有批注".into();
+    upsert(&mut p, mark.clone()).unwrap();
+    let saved = p.reading_marks.clone();
+    mark.pdf_rects = vec![rect(4)];
+    assert_eq!(upsert(&mut p, mark.clone()).unwrap_err().code, "VALIDATION");
+    mark.id = id();
+    assert_eq!(upsert(&mut p, mark.clone()).unwrap_err().code, "VALIDATION");
+    assert_eq!(p.reading_marks, saved);
+    mark.pdf_rects = vec![rect(2)];
+    upsert(&mut p, mark).unwrap();
+    assert!(export_notes(&p).contains("## PDF 第 2 页\n"));
+}
+#[test]
 fn invalid_pdf_and_out_of_bounds_annotations_are_rejected_atomically() {
     assert!(novel_studio_lib::visual::Media::from_pdf_bytes(b"not a PDF".to_vec()).is_err());
     let (mut p, _) = pdf_document(Path::new("tests/fixtures/illustrated.pdf")).unwrap();

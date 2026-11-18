@@ -21,6 +21,8 @@ pub struct ReadingMark {
     pub color: String,
     pub note: String,
     pub pdf_rects: Vec<PdfRect>,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 impl Default for ReadingMark {
     fn default() -> Self {
@@ -33,6 +35,8 @@ impl Default for ReadingMark {
             color: "yellow".into(),
             note: String::new(),
             pdf_rects: vec![],
+            created_at: 0,
+            updated_at: 0,
         }
     }
 }
@@ -90,7 +94,7 @@ pub fn validate(p: &Project) -> Result<()> {
     }
     Ok(())
 }
-pub fn upsert(p: &mut Project, mark: ReadingMark) -> Result<()> {
+pub fn upsert(p: &mut Project, mut mark: ReadingMark) -> Result<()> {
     shape(p, &mark)?;
     let old = p.reading_marks.iter().position(|m| m.id == mark.id);
     let anchors_unchanged = old.is_some_and(|i| {
@@ -107,9 +111,27 @@ pub fn upsert(p: &mut Project, mark: ReadingMark) -> Result<()> {
             "选中的原文已改变，请重新选择后添加批注。",
         ));
     }
+    if !anchors_unchanged
+        && p.pdf_book.is_some()
+        && p.reader.total_pages > 0
+        && mark
+            .pdf_rects
+            .iter()
+            .any(|rect| rect.page > p.reader.total_pages)
+    {
+        return Err(AppError::new("VALIDATION", "PDF 批注页码超出本书范围。"));
+    }
+    // Host timestamps only. Old marks with unknown creation time stay unknown.
+    let timestamp = now();
     if let Some(i) = old {
+        mark.created_at = p.reading_marks[i].created_at;
+        mark.updated_at = timestamp
+            .max(p.reading_marks[i].updated_at)
+            .max(mark.created_at);
         p.reading_marks[i] = mark;
     } else {
+        mark.created_at = timestamp;
+        mark.updated_at = timestamp;
         p.reading_marks.push(mark);
     }
     Ok(())
@@ -118,10 +140,11 @@ pub fn export_notes(p: &Project) -> String {
     let mut text = format!("# {} · 阅读批注\n\n", p.title);
     for m in &p.reading_marks {
         let location = if p.pdf_book.is_some() {
-            format!(
-                "PDF 第 {} 页",
-                m.pdf_rects.first().map(|r| r.page).unwrap_or(1)
-            )
+            let mut pages: Vec<_> = m.pdf_rects.iter().map(|rect| rect.page).collect();
+            pages.sort_unstable();
+            pages.dedup();
+            let labels: Vec<_> = pages.iter().map(usize::to_string).collect();
+            format!("PDF 第 {} 页", labels.join("、"))
         } else {
             p.chapter(&m.chapter_id)
                 .map(|c| c.title.clone())

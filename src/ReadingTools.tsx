@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Copy,
   Download,
@@ -9,9 +16,11 @@ import {
   X,
 } from "lucide-react";
 import type { Actions } from "./App";
-import type { Project, ReadingMark, PdfRect, BookContent } from "./domain";
-import { Button, Modal } from "./components";
+import type { Project, ReadingMark, PdfRect, BookContent, ReaderState } from "./domain";
+import { Button } from "./components";
 import { command } from "./bridge";
+import { ReadingAnnotationEditor } from "./ReadingAnnotationEditor";
+import { readTextSelection, rowOf, sameRows, selectionRows } from "./text-selection";
 
 export const markCurrent = (p: Project, m: ReadingMark) =>
   !!p.pdfBook ||
@@ -22,14 +31,72 @@ export type MarkSelection = Pick<
   ReadingMark,
   "chapterId" | "start" | "end" | "quote" | "pdfRects"
 >;
-export function useReadingMarks(project: Project, actions: Actions) {
-  const [selection, select] = useState<MarkSelection | null>(null);
-  const [editing, edit] = useState<ReadingMark | null>(null);
+export function useReadingMarks(
+  project: Project,
+  actions: Actions,
+  /**
+   * RF-REV-402：正文根节点（文本阅读器的 .book-stage）。提供后启用统一选区生命周期：
+   * selectionchange 实时同步键盘/程序选区、正文外 mouseup 与失焦后采集、端点页块保护、原生复制取原文。
+   * PDF 阅读器不传，沿用 mouseup 采集。
+   */
+  rootRef?: RefObject<HTMLElement | null>,
+) {
+  const [selection, setSelection] = useState<MarkSelection | null>(null);
+  /** 只在内容真正变化时更新，避免 selectionchange 高频触发无意义重渲染 */
+  const select = (next: MarkSelection | null) =>
+    setSelection((prev) =>
+      prev === next ||
+      (prev &&
+        next &&
+        prev.chapterId === next.chapterId &&
+        prev.start === next.start &&
+        prev.end === next.end &&
+        prev.quote === next.quote &&
+        prev.pdfRects.length === 0 &&
+        next.pdfRects.length === 0)
+        ? prev
+        : next,
+    );
+  const [editing, setEditing] = useState<ReadingMark | null>(null);
+  const edit = (mark: ReadingMark | null) => setEditing(mark ? { ...mark } : null);
   const [saving, setSaving] = useState(false);
+  /** 用户正在用鼠标拖动选择：mousedown 后、mouseup/失焦前不清除原生 Selection，也不中途采集 */
+  const selecting = useRef(false);
+  /** 鼠标按下时所在页块（拖动初期选区仍折叠时也要保护起点） */
+  const dragRow = useRef<number | null>(null);
+  /**
+   * 需要保持挂载的选区端点页块（anchor/focus，最多 2 个）。
+   * 用 state 而不是 ref：端点变化必须驱动 Reader 重新计算挂载行。
+   */
+  const [protectedRows, setProtectedRows] = useState<number[]>([]);
+  const updateRows = (rows: number[]) =>
+    setProtectedRows((prev) => (sameRows(prev, rows) ? prev : rows));
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
+  /** 文本阅读器：按当前原生选区同步端点保护与 MarkSelection（键盘/鼠标/程序选区共用） */
+  const sync = (root: HTMLElement) => {
+    const s = window.getSelection();
+    const rows = selectionRows(root, s);
+    if (selecting.current && dragRow.current !== null) rows.push(dragRow.current);
+    const active = selecting.current || (!!s && !s.isCollapsed && rows.length > 0);
+    updateRows(active ? [...new Set(rows)].sort((a, b) => a - b) : []);
+    if (selecting.current) return; // 拖动中：松开时统一采集，避免工具栏闪烁
+    const r = readTextSelection(root, projectRef.current.chapters, s);
+    select(r ? { ...r, pdfRects: [] } : null);
+  };
+
   const clear = () => {
     select(null);
-    window.getSelection()?.removeAllRanges();
+    dragRow.current = null;
+    updateRows([]); // 清除页块保护
+    // 仅在没有活动选择时清除原生 Selection，避免打断跨页拖动
+    const sel = window.getSelection();
+    if (sel && !selecting.current) {
+      sel.removeAllRanges();
+    }
   };
+
   const draft = (note: boolean) => {
     if (!selection) return;
     const m = {
@@ -47,6 +114,12 @@ export function useReadingMarks(project: Project, actions: Actions) {
       });
   };
   const collect = (root: HTMLElement) => {
+    selecting.current = false; // 捕获完成，允许后续清除
+    dragRow.current = null;
+    if (rootRef) {
+      sync(root);
+      return;
+    }
     const s = window.getSelection();
     if (!s?.rangeCount || s.isCollapsed) return;
     const range = s.getRangeAt(0);
@@ -83,35 +156,61 @@ export function useReadingMarks(project: Project, actions: Actions) {
           pdfRects: rects,
         });
     } else {
-      const point = (node: Node, offset: number) => {
-        const el = node instanceof Element ? node : node.parentElement;
-        const p = el?.closest<HTMLElement>("p[data-offset]");
-        if (!p) return null;
-        const r = document.createRange();
-        r.setStart(p, 0);
-        r.setEnd(node, offset);
-        return +(p.dataset.offset || 0) + r.toString().length;
-      };
-      const start = point(range.startContainer, range.startOffset),
-        end = point(range.endContainer, range.endOffset);
-      const cid = root.dataset.chapter!,
-        c = project.chapters.find((c) => c.id === cid);
-      if (
-        start !== null &&
-        end !== null &&
-        c &&
-        end > start &&
-        c.working.slice(start, end).trim()
-      )
-        select({
-          chapterId: cid,
-          start,
-          end,
-          quote: c.working.slice(start, end),
-          pdfRects: [],
-        });
+      const r = readTextSelection(root, project.chapters, s);
+      if (r) select({ ...r, pdfRects: [] });
     }
   };
+
+  /** 原生复制（Ctrl+C/右键）：中间页块可能已虚拟化卸载，剪贴板写入完整原文 working.slice(start,end) */
+  const copy = (e: ClipboardEvent<HTMLElement>) => {
+    const root = rootRef?.current;
+    if (!root || project.pdfBook) return;
+    const r = readTextSelection(root, project.chapters);
+    if (!r) return;
+    e.clipboardData.setData("text/plain", r.quote);
+    e.preventDefault();
+  };
+
+  // 统一选区生命周期：mousedown 标记拖动 → selectionchange 同步端点/键盘选区 → mouseup（含正文外）/失焦收尾。
+  // 不使用延时计时器，旧的松开事件不会干扰新一次选择。
+  useEffect(() => {
+    const root = () => rootRef?.current || null;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      const r = root();
+      const inText = r
+        ? r.contains(target) &&
+          !target.closest("button, input, select, textarea, [role=button]")
+        : !!target.closest(".book-scroll-row, .book-leaf, .pdf-page");
+      if (!inText) return;
+      selecting.current = true;
+      dragRow.current = rowOf(target);
+      if (r) updateRows(dragRow.current === null ? [] : [dragRow.current]);
+    };
+    const finish = () => {
+      if (!selecting.current) return;
+      selecting.current = false;
+      dragRow.current = null;
+      const r = root();
+      if (r) sync(r); // 正文外松开、失焦：仍按当前真实选区采集与保护
+    };
+    const handleSelectionChange = () => {
+      const r = root();
+      if (r) sync(r);
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("mouseup", finish);
+    window.addEventListener("blur", finish);
+    if (rootRef) document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("mouseup", finish);
+      window.removeEventListener("blur", finish);
+      document.removeEventListener("selectionchange", handleSelectionChange);
+    };
+  }, [rootRef]);
+
   const ui = (
     <>
       {selection && (
@@ -146,84 +245,40 @@ export function useReadingMarks(project: Project, actions: Actions) {
         </div>
       )}
       {editing && (
-        <Modal
-          title="阅读批注"
-          subtitle="高亮和想法保存在这部作品中。"
-          onClose={() => edit(null)}
-        >
-          <blockquote className="annotation-quote">{editing.quote}</blockquote>
-          {!markCurrent(project, editing) && !editing.pdfRects.length && (
-            <p className="inline-note">
-              原文已修改，请重新核对位置。你的批注会保留。
-            </p>
-          )}
-          <div className="mark-colors" role="group" aria-label="高亮颜色">
-            {[
-              { id: "yellow", label: "黄色" },
-              { id: "green", label: "绿色" },
-              { id: "blue", label: "蓝色" },
-              { id: "pink", label: "粉色" },
-            ].map((c) => (
-              <button
-                key={c.id}
-                className={`mark-${c.id}`}
-                aria-label={c.label}
-                aria-pressed={editing.color === c.id}
-                onClick={() => edit({ ...editing, color: c.id })}
-              />
-            ))}
-          </div>
-          <label className="annotation-note">
-            写下你的想法
-            <textarea
-              aria-label="批注内容"
-              rows={5}
-              value={editing.note}
-              onChange={(e) => edit({ ...editing, note: e.target.value })}
-              placeholder="可以只保留高亮，也可以写下批注…"
-            />
-          </label>
-          <footer>
-            {project.readingMarks.some((m) => m.id === editing.id) && (
-              <Button
-                variant="ghost"
-                busy={saving}
-                onClick={async () => {
-                  setSaving(true);
-                  const p = await actions.mutate({
-                    type: "deleteReadingMark",
-                    mark_id: editing.id,
-                  });
-                  setSaving(false);
-                  if (p) edit(null);
-                }}
-              >
-                <Trash2 size={15} />
-                删除
-              </Button>
-            )}
-            <Button onClick={() => edit(null)}>取消</Button>
-            <Button
-              variant="primary"
-              busy={saving}
-              onClick={async () => {
-                setSaving(true);
-                const p = await actions.mutate({
-                  type: "readingMark",
-                  mark: editing,
-                });
-                setSaving(false);
-                if (p) edit(null);
-              }}
-            >
-              保存批注
-            </Button>
-          </footer>
-        </Modal>
+        <ReadingAnnotationEditor
+          editing={editing}
+          project={project}
+          actions={actions}
+          onClose={() => {
+            edit(null);
+          }}
+          saving={saving}
+          onSave={async (mark) => {
+            setSaving(true);
+            try {
+            const p = await actions.mutate({
+              type: "readingMark",
+              mark,
+            });
+            return !!p;
+            } finally { setSaving(false); }
+          }}
+          onDelete={async (id) => {
+            setSaving(true);
+            const p = await actions.mutate({
+              type: "deleteReadingMark",
+              mark_id: id,
+            });
+            setSaving(false);
+            if (p) {
+              edit(null);
+            }
+          }}
+        />
       )}
     </>
   );
-  return { collect, select, edit, ui, clear };
+  return { collect, copy, select, edit, ui, clear, protectedRows, selection };
 }
 
 export function markedText(
@@ -304,6 +359,8 @@ export function ReadingLibrary({
   goto,
   edit,
   pdfSearch,
+  bookmarks,
+  onBookmarkDelete,
 }: {
   project: Project;
   actions: Actions;
@@ -314,12 +371,21 @@ export function ReadingLibrary({
     query: string,
     signal: AbortSignal,
   ) => Promise<ReadingSearchResult[]>;
+  bookmarks: ReaderState["bookmarks"];
+  onBookmarkDelete: (id: string) => void;
 }) {
   const [tab, setTab] = useState("contents"),
     [query, setQuery] = useState(""),
     [results, setResults] = useState<ReadingSearchResult[]>([]),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [markSort, setMarkSort] = useState<"position" | "time-latest" | "time-earliest">("position");
   const cancel = useRef<AbortController | null>(null);
+  const noteClick = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelNoteClick = () => {
+    if (noteClick.current) clearTimeout(noteClick.current);
+    noteClick.current = null;
+  };
+  useEffect(() => () => { if (noteClick.current) clearTimeout(noteClick.current); }, []);
   useEffect(() => () => cancel.current?.abort(), []);
   const search = async () => {
     cancel.current?.abort();
@@ -367,6 +433,7 @@ export function ReadingLibrary({
       <div className="reader-library-tabs">
         {[
           { id: "contents", name: "目录" },
+          { id: "bookmarks", name: "书签" },
           { id: "marks", name: "批注" },
           { id: "search", name: "搜索" },
         ].map((t) => (
@@ -381,52 +448,163 @@ export function ReadingLibrary({
         ))}
       </div>
       {tab === "contents" && children}
+      {tab === "bookmarks" && (
+        <>
+          <h3>书签</h3>
+          {bookmarks.length === 0 && (
+            <p>翻到喜欢的一页，添加书签。</p>
+          )}
+          {bookmarks.map((b) => (
+            <div className="reader-bookmark" key={b.id}>
+              <button onClick={() => goto(b.chapterId, b.offset)}>
+                {b.label}
+              </button>
+              <button
+                aria-label="删除书签"
+                onClick={() => onBookmarkDelete(b.id)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </>
+      )}
       {tab === "marks" && (
         <>
           <div className="reader-notes-heading">
             <h3>高亮与批注 · {project.readingMarks.length}</h3>
-            <Button
-              variant="ghost"
-              aria-label="导出批注"
-              onClick={() =>
-                void actions.perform(async () => {
-                  if (
-                    await command<boolean>("export_reading_notes", {
-                      projectId: project.id,
-                    })
-                  )
-                    actions.notice("阅读批注已导出。");
-                })
-              }
-            >
-              <Download size={14} />
-            </Button>
+            <div className="reader-marks-controls">
+              <select
+                aria-label="批注排序"
+                value={markSort}
+                onChange={(e) =>
+                  setMarkSort(e.target.value as "position" | "time-latest" | "time-earliest")
+                }
+              >
+                <option value="position">按书中顺序</option>
+                <option value="time-latest">按时间 · 最新</option>
+                <option value="time-earliest">按时间 · 最早</option>
+              </select>
+              <Button
+                variant="ghost"
+                aria-label="导出批注"
+                onClick={() =>
+                  void actions.perform(async () => {
+                    if (
+                      await command<boolean>("export_reading_notes", {
+                        projectId: project.id,
+                      })
+                    )
+                      actions.notice("阅读批注已导出。");
+                  })
+                }
+              >
+                <Download size={14} />
+              </Button>
+            </div>
           </div>
           {!project.readingMarks.length && (
             <p>选中文字后高亮或写批注。扫描 PDF 也可以框选区域。</p>
           )}
-          {project.readingMarks.map((m) => (
-            <div key={m.id} className="reading-note-card">
-              <button
-                onClick={() => {
-                  if (markCurrent(project, m))
-                    goto(
-                      m.chapterId,
-                      m.pdfRects.length ? m.pdfRects[0].page - 1 : m.start,
+          {[...project.readingMarks]
+            .sort((a, b) => {
+              if (markSort === "time-latest" || markSort === "time-earliest") {
+                const aTime = a.createdAt ?? 0;
+                const bTime = b.createdAt ?? 0;
+                if (aTime === 0 && bTime === 0) {
+                  // 都未知时回退到书中顺序
+                  if (project.pdfBook) {
+                    const aPage = a.pdfRects[0]?.page || 0;
+                    const bPage = b.pdfRects[0]?.page || 0;
+                    if (aPage !== bPage) return aPage - bPage;
+                    const aY = a.pdfRects[0]?.y || 0;
+                    const bY = b.pdfRects[0]?.y || 0;
+                    if (Math.abs(aY - bY) > 0.01) return aY - bY;
+                    return (a.pdfRects[0]?.x || 0) - (b.pdfRects[0]?.x || 0);
+                  } else {
+                    const aIdx = project.chapters.findIndex(
+                      (c) => c.id === a.chapterId,
                     );
-                  else actions.notice("原文已修改，请重新核对批注位置。");
-                }}
-              >
-                <i className={`mark-${m.color}`} />
-                <strong>{m.quote || "区域批注"}</strong>
-              </button>
-              {m.note && <p>{m.note}</p>}
-              {!markCurrent(project, m) && <small>原文已修改 · 批注保留</small>}
-              <button className="note-edit" onClick={() => edit(m)}>
-                编辑批注
-              </button>
-            </div>
-          ))}
+                    const bIdx = project.chapters.findIndex(
+                      (c) => c.id === b.chapterId,
+                    );
+                    if (aIdx !== bIdx) return aIdx - bIdx;
+                    return a.start - b.start;
+                  }
+                }
+                if (aTime === 0) return 1; // 未知时间排后
+                if (bTime === 0) return -1;
+                // time-latest: 新的排前；time-earliest: 旧的排前
+                return markSort === "time-latest" ? bTime - aTime : aTime - bTime;
+              }
+              // 按书中顺序：章节顺序 → UTF-16 起点；PDF：原页 → y → x
+              if (project.pdfBook) {
+                const aPage = a.pdfRects[0]?.page || 0;
+                const bPage = b.pdfRects[0]?.page || 0;
+                if (aPage !== bPage) return aPage - bPage;
+                const aY = a.pdfRects[0]?.y || 0;
+                const bY = b.pdfRects[0]?.y || 0;
+                if (Math.abs(aY - bY) > 0.01) return aY - bY;
+                return (a.pdfRects[0]?.x || 0) - (b.pdfRects[0]?.x || 0);
+              } else {
+                const aIdx = project.chapters.findIndex(
+                  (c) => c.id === a.chapterId,
+                );
+                const bIdx = project.chapters.findIndex(
+                  (c) => c.id === b.chapterId,
+                );
+                if (aIdx !== bIdx) return aIdx - bIdx;
+                return a.start - b.start;
+              }
+            })
+            .map((m) => {
+              const chapter = project.chapters.find(
+                (c) => c.id === m.chapterId,
+              );
+              return (
+                <div
+                  key={m.id}
+                  className="reading-note-card"
+                  onDoubleClick={(e) => {
+                    e.preventDefault();
+                    cancelNoteClick();
+                    edit(m);
+                  }}
+                >
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      cancelNoteClick();
+                      const locate = () => {
+                        if (markCurrent(project, m))
+                          goto(
+                            m.chapterId,
+                            m.pdfRects.length ? m.pdfRects[0].page - 1 : m.start,
+                          );
+                        else
+                          actions.notice("原文已修改，请重新核对批注位置。");
+                      };
+                      if (e.detail === 0) locate();
+                      else noteClick.current = setTimeout(locate, 350);
+                    }}
+                  >
+                    <i className={`mark-${m.color}`} />
+                    <strong>{m.quote || "区域批注"}</strong>
+                  </button>
+                  {m.note && <p>{m.note}</p>}
+                  <small>
+                    {chapter?.title || (m.pdfRects.length ? `第 ${m.pdfRects[0].page} 页` : "位置未知")}
+                    {!markCurrent(project, m) && " · 原文已修改 · 批注保留"}
+                  </small>
+                  <button
+                    className="note-edit"
+                    onClick={() => edit(m)}
+                  >
+                    编辑批注
+                  </button>
+                </div>
+              );
+            })}
         </>
       )}
       {tab === "search" && (

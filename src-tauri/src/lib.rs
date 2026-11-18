@@ -1,3 +1,4 @@
+pub mod app_preferences;
 pub mod context;
 pub mod db;
 pub mod ebooks;
@@ -7,6 +8,7 @@ pub mod generation_limits;
 pub mod model;
 pub mod presets;
 pub mod provider;
+pub mod reader_fonts;
 pub mod reader_marks;
 pub mod reading;
 pub mod updates;
@@ -374,7 +376,8 @@ async fn import_project(state: tauri::State<'_, Arc<AppState>>) -> Result<Option
     let Some(file) = file else { return Ok(None) };
     let p = files::read_package(file.path())?;
     let assets = files::read_package_media(file.path(), &p)?;
-    Ok(Some(state.db.create_with_media(p, &assets)?))
+    let fonts = files::read_package_fonts(file.path(), &p)?;
+    Ok(Some(state.db.create_with_assets(p, &assets, &fonts)?))
 }
 #[tauri::command]
 async fn import_reference(encoding: String) -> Result<Option<serde_json::Value>> {
@@ -588,6 +591,72 @@ fn pdf_data(
     Ok(tauri::ipc::Response::new(media.bytes))
 }
 #[tauri::command]
+fn load_app_preferences(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<app_preferences::AppPreferences> {
+    state.db.load_app_preferences()
+}
+#[tauri::command]
+fn list_reader_fonts(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<reader_fonts::ReaderFontInfo>> {
+    state.db.reader_fonts()
+}
+#[tauri::command]
+async fn import_reader_font(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<reader_fonts::ReaderFontInfo>> {
+    let file = rfd::AsyncFileDialog::new()
+        .set_title("导入阅读字体")
+        .add_filter("字体文件", &["ttf", "otf"])
+        .pick_file()
+        .await;
+    let Some(file) = file else { return Ok(None) };
+    Ok(Some(
+        import_reader_font_path(state, file.path().to_string_lossy().into()).await?,
+    ))
+}
+#[tauri::command]
+async fn import_reader_font_path(
+    state: tauri::State<'_, Arc<AppState>>,
+    path: String,
+) -> Result<reader_fonts::ReaderFontInfo> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        state
+            .db
+            .import_reader_font(reader_fonts::ReaderFontAsset::from_path(
+                std::path::Path::new(&path),
+            )?)
+    })
+    .await
+    .map_err(|_| AppError::new("FONT_IMPORT", "字体导入未完成，请重试。"))?
+}
+#[tauri::command]
+async fn reader_font_data(
+    state: tauri::State<'_, Arc<AppState>>,
+    font_id: String,
+) -> Result<tauri::ipc::Response> {
+    let state = state.inner().clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        state.db.reader_font(&font_id).map(|font| font.bytes)
+    })
+    .await
+    .map_err(|_| AppError::new("FONT_READ", "暂时无法读取字体，请重试。"))??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+#[tauri::command]
+fn delete_reader_font(state: tauri::State<'_, Arc<AppState>>, font_id: String) -> Result<()> {
+    state.db.delete_reader_font(&font_id)
+}
+#[tauri::command]
+fn save_app_preferences(
+    state: tauri::State<'_, Arc<AppState>>,
+    patch: app_preferences::AppPreferencesPatch,
+) -> Result<app_preferences::AppPreferences> {
+    state.db.save_app_preferences(patch)
+}
+#[tauri::command]
 fn save_reader(
     state: tauri::State<'_, Arc<AppState>>,
     project_id: String,
@@ -721,6 +790,13 @@ pub fn run() {
             import_portrait,
             media_data,
             pdf_data,
+            load_app_preferences,
+            list_reader_fonts,
+            import_reader_font,
+            import_reader_font_path,
+            reader_font_data,
+            delete_reader_font,
+            save_app_preferences,
             save_reader,
             save_pdf_cover,
             export_reading_notes,

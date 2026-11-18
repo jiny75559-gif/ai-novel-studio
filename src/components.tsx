@@ -183,7 +183,11 @@ export function Confirm({
     <Modal title={title} onClose={onClose}>
       <p className="modal-description">{description}</p>
       {children}
-      {error && <p className="inline-note">{error}</p>}
+      {error && (
+        <p className="inline-note" role="alert">
+          {error}
+        </p>
+      )}
       <footer>
         <Button onClick={onClose}>取消</Button>
         <Button

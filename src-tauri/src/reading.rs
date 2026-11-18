@@ -83,6 +83,10 @@ pub struct ReaderState {
     pub zoom: usize,
     pub theme: String,
     pub layout: String,
+    pub reading_mode: String,
+    pub title_style: ChapterTitleStyle,
+    pub header: PageBand,
+    pub footer: PageBand,
     pub bookmarks: Vec<Bookmark>,
 }
 impl Default for ReaderState {
@@ -101,8 +105,101 @@ impl Default for ReaderState {
             zoom: 100,
             theme: "paper".into(),
             layout: "double".into(),
+            reading_mode: "paged".into(),
+            title_style: ChapterTitleStyle::default(),
+            header: PageBand::header(),
+            footer: PageBand::footer(),
             bookmarks: vec![],
         }
+    }
+}
+
+/// Reflowed text only. The title is presentation; source text/UTF-16 anchors stay intact.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct ChapterTitleStyle {
+    pub enabled: bool,
+    pub font_family: String,
+    pub font_size: usize,
+    pub font_weight: usize,
+    pub align: String,
+    pub space_before: usize,
+    pub space_after: usize,
+}
+impl Default for ChapterTitleStyle {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            font_family: "inherit".into(),
+            font_size: 28,
+            font_weight: 600,
+            align: "center".into(),
+            space_before: 0,
+            space_after: 20,
+        }
+    }
+}
+impl ChapterTitleStyle {
+    fn validate(&self) -> Result<()> {
+        if !(14..=56).contains(&self.font_size)
+            || ![400, 500, 600, 700].contains(&self.font_weight)
+            || !crate::reader_fonts::valid_family(&self.font_family, true)
+            || !["left", "center", "right"].contains(&self.align.as_str())
+            || self.space_before > 80
+            || self.space_after > 80
+        {
+            return Err(AppError::new("VALIDATION", "章节标题样式无效。"));
+        }
+        Ok(())
+    }
+}
+
+/// Fixed, single-line page furniture slots. No executable templates or arbitrary CSS.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageBand {
+    pub enabled: bool,
+    pub left: String,
+    pub center: String,
+    pub right: String,
+    pub font_size: usize,
+}
+impl PageBand {
+    pub fn header() -> Self {
+        Self {
+            enabled: true,
+            left: "book-title".into(),
+            center: "none".into(),
+            right: "chapter-title".into(),
+            font_size: 10,
+        }
+    }
+    pub fn footer() -> Self {
+        Self {
+            enabled: true,
+            left: "none".into(),
+            center: "chapter-page".into(),
+            right: "none".into(),
+            font_size: 12,
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        const SLOTS: [&str; 6] = [
+            "none",
+            "book-title",
+            "chapter-title",
+            "book-page",
+            "chapter-page",
+            "progress",
+        ];
+        if !(8..=18).contains(&self.font_size)
+            || [&self.left, &self.center, &self.right]
+                .iter()
+                .any(|s| !SLOTS.contains(&s.as_str()))
+        {
+            return Err(AppError::new("VALIDATION", "页眉或页脚设置无效。"));
+        }
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -115,22 +212,25 @@ pub struct Bookmark {
 }
 impl ReaderState {
     pub fn validate(&self, p: &Project) -> Result<()> {
-        if !(14..=36).contains(&self.font_size)
-            || !["NanoOldSong", "SimSun", "Microsoft YaHei", "Georgia"]
-                .contains(&self.font_family.as_str())
-            || self.paragraph_spacing > 32
-            || !(24..=64).contains(&self.page_margin)
-            || !(1.4..=2.5).contains(&self.line_height)
+        if !(12..=48).contains(&self.font_size)
+            || !crate::reader_fonts::valid_family(&self.font_family, false)
+            || self.paragraph_spacing > 48
+            || !(8..=96).contains(&self.page_margin)
+            || !(1.0..=2.8).contains(&self.line_height)
             || !(50..=if p.pdf_book.is_some() { 400 } else { 160 }).contains(&self.zoom)
             || !["paper", "white", "night"].contains(&self.theme.as_str())
             || !["single", "double"].contains(&self.layout.as_str())
+            || !["paged", "scroll"].contains(&self.reading_mode.as_str())
             || self.bookmarks.len() > 500
         {
             return Err(AppError::new(
                 "VALIDATION",
-                "阅读字号、行距、缩放或书签无效。",
+                "阅读模式、字号、行距、缩放或书签无效。",
             ));
         }
+        self.title_style.validate()?;
+        self.header.validate()?;
+        self.footer.validate()?;
         if let Some(pdf) = &p.pdf_book {
             if uuid::Uuid::parse_str(&pdf.document_id).is_err()
                 || p.book_source != "pdf"

@@ -13,3 +13,5 @@ PDF 原版式阅读使用 Mozilla PDF.js / pdfjs-dist 6.4.299，Apache-2.0 授�
 HTML 字符实体解码使用 html-escape 0.2.15（MIT）；完整许可证随软件资源分发于 `public/pdfjs/html-escape-LICENSE`。
 
 新增 HTML5 解析使用 scraper 0.27.0（ISC），依赖 html5ever（MIT/Apache-2.0）；更新签名校验使用 minisign-verify 0.2.5（MIT），版本比较使用 semver 1.x（MIT/Apache-2.0）。完整版本与许可证字段以 Cargo.lock 和各依赖源 LICENSE 为准。
+
+自定义字体校验使用 ttf-parser 0.25.1（MIT），完整授权见 `public/licenses/ttf-parser-MIT.txt`。

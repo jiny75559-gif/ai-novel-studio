@@ -474,8 +474,11 @@ export interface ReadingMark {
   color: string;
   note: string;
   pdfRects: PdfRect[];
+  createdAt?: number;
+  updatedAt?: number;
 }
 export interface ReaderState {
+  /** REQ-FE-308：支持内置字体或 font:<id> 格式的自定义字体 */
   fontFamily: string;
   paragraphSpacing: number;
   pageMargin: number;
@@ -490,6 +493,96 @@ export interface ReaderState {
   theme: string;
   layout: string;
   bookmarks: Bookmark[];
+  /** REQ-FE-306：阅读模式，与 layout(single|double) 独立；缺省 paged */
+  readingMode: ReadingMode;
+  /** REQ-FE-307：独立章节标题样式；enabled=false 保持旧外观 */
+  titleStyle: TitleStyle;
+  /** REQ-FE-307：页眉/页脚固定单行左中右槽位 */
+  header: PageBand;
+  footer: PageBand;
+}
+export type ReadingMode = "paged" | "scroll";
+/** REQ-FE-308：支持内置字体或 font:<id> 格式的自定义字体；inherit 跟随正文 */
+export type TitleFont =
+  | "inherit"
+  | "NanoOldSong"
+  | "SimSun"
+  | "Microsoft YaHei"
+  | "Georgia"
+  | `font:${string}`;
+export interface TitleStyle {
+  enabled: boolean;
+  fontFamily: TitleFont;
+  /** 14–56 CSS px 整数 */
+  fontSize: number;
+  fontWeight: 400 | 500 | 600 | 700;
+  align: "left" | "center" | "right";
+  /** 0–80 CSS px 整数 */
+  spaceBefore: number;
+  spaceAfter: number;
+}
+export type BandSlot =
+  | "none"
+  | "book-title"
+  | "chapter-title"
+  | "book-page"
+  | "chapter-page"
+  | "progress";
+export interface PageBand {
+  enabled: boolean;
+  left: BandSlot;
+  center: BandSlot;
+  right: BandSlot;
+  /** 8–18 CSS px 整数 */
+  fontSize: number;
+}
+/** REQ-FE-308：自定义字体资产元数据 */
+export interface ReaderFontInfo {
+  id: string;
+  familyName: string;
+  styleName: string;
+  format: "ttf" | "otf";
+  sha256: string;
+  byteLength: number;
+  createdAt: number;
+}
+/** contracts.md REQ-FE-306/307 默认值（保留旧外观） */
+export const DEFAULT_TITLE_STYLE: TitleStyle = {
+  enabled: false,
+  fontFamily: "inherit",
+  fontSize: 28,
+  fontWeight: 600,
+  align: "center",
+  spaceBefore: 0,
+  spaceAfter: 20,
+};
+export const DEFAULT_HEADER: PageBand = {
+  enabled: true,
+  left: "book-title",
+  center: "none",
+  right: "chapter-title",
+  fontSize: 10,
+};
+export const DEFAULT_FOOTER: PageBand = {
+  enabled: true,
+  left: "none",
+  center: "chapter-page",
+  right: "none",
+  fontSize: 12,
+};
+/**
+ * 宿主返回的 ReaderState 应已含新字段；为防旧缓存/异常数据缺字段，读取时补默认值。
+ * 只补缺失项，不改写已存在的值；保存时发送完整对象（header/footer 五个字段齐全）。
+ */
+export function withReaderDefaults(r: ReaderState): ReaderState {
+  const partial = r as Partial<ReaderState>;
+  return {
+    ...r,
+    readingMode: partial.readingMode === "scroll" ? "scroll" : "paged",
+    titleStyle: { ...DEFAULT_TITLE_STYLE, ...(partial.titleStyle || {}) },
+    header: { ...DEFAULT_HEADER, ...(partial.header || {}) },
+    footer: { ...DEFAULT_FOOTER, ...(partial.footer || {}) },
+  };
 }
 export interface BookOutline {
   title: string;

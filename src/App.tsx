@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import packageJson from "../package.json";
 import {
   BookOpen,
   Feather,
@@ -28,6 +29,8 @@ import {
   ShieldCheck,
   Search,
   X,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { command, desktop, errorMessage } from "./bridge";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -62,6 +65,7 @@ import { WorkspaceBoundary } from "./WorkspaceBoundary";
 import { UpdatesPanel } from "./UpdatesPanel";
 
 export interface Actions {
+  registerReadingGuard: (guard: { flush: () => Promise<boolean>; dirty: () => boolean }) => () => void;
   mutate: (m: Mutation) => Promise<Project | undefined>;
   notice: (s: string) => void;
   run: (
@@ -71,7 +75,8 @@ export interface Actions {
     cid?: string,
   ) => Promise<void>;
   perform: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
-  navigate: (view: View, cid?: string) => Promise<void>;
+  /** Commit local reader anchors only after the leave guard and pending saves succeed. */
+  navigate: (view: View, cid?: string, commit?: () => void) => Promise<boolean>;
   refreshProviders: () => Promise<void>;
   refreshProject: () => Promise<void>;
   saveReader: (pid: string, state: ReaderState) => Promise<void>;
@@ -90,7 +95,22 @@ const nav = [
 export function App() {
   const [view, setView] = useState<View>("home");
   const [updatesOpen, setUpdatesOpen] = useState(false);
+  const [mainNavCollapsed, setMainNavCollapsed] = useState(false);
+  const [readerNavCollapsed, setReaderNavCollapsed] = useState(false);
+  // 偏好读取状态：loading 期间及 error 时导航切换保持禁用，避免按默认值写库；
+  // error 时展示持续提示与重试入口，重试成功后才进入 ready。
+  const [preferenceStatus, setPreferenceStatus] = useState<"loading" | "error" | "ready">("loading");
+  const [preferenceError, setPreferenceError] = useState("");
+  const preferencesLoaded = preferenceStatus === "ready";
+  const preferenceLoadSeq = useRef(0);
+  const preferenceLoading = useRef(false);
+  const preferenceSaving = useRef<Promise<void> | null>(null);
   const readerPending = useRef(new Map<string, ReaderState>());
+  const readingGuard = useRef<{ flush: () => Promise<boolean>; dirty: () => boolean } | null>(null);
+  const registerReadingGuard = useCallback((guard: { flush: () => Promise<boolean>; dirty: () => boolean }) => {
+    readingGuard.current = guard;
+    return () => { if (readingGuard.current === guard) readingGuard.current = null; };
+  }, []);
   const [librarySort, setLibrarySort] = useState("reading");
   const [cards, setCards] = useState<ProjectCard[]>([]);
   const [project, setProject] = useState<Project | null>(null);
@@ -148,16 +168,80 @@ export function App() {
   }, []);
   useEffect(() => {
     if (desktop) {
-      void perform(async () => {
-        await Promise.all([refreshCards(), refreshProviders()]);
-      });
+      void perform(async () => { await Promise.all([refreshCards(), refreshProviders()]); });
     }
   }, [perform, refreshCards, refreshProviders]);
+  const loadPreferences = useCallback(async () => {
+    // 防连点：同一时间只允许一个读取请求；迟到响应按序号丢弃
+    if (preferenceLoading.current) return;
+    preferenceLoading.current = true;
+    const seq = ++preferenceLoadSeq.current;
+    setPreferenceStatus("loading");
+    try {
+      const prefs = await command<{
+        mainNavCollapsed: boolean;
+        readerNavCollapsed: boolean;
+      }>("load_app_preferences");
+      if (seq !== preferenceLoadSeq.current) return;
+      setMainNavCollapsed(prefs.mainNavCollapsed);
+      setReaderNavCollapsed(prefs.readerNavCollapsed);
+      setPreferenceError("");
+      setPreferenceStatus("ready");
+    } catch (e) {
+      if (seq !== preferenceLoadSeq.current) return;
+      const text = errorMessage(e);
+      setPreferenceError(text);
+      setPreferenceStatus("error");
+      notify(text);
+    } finally {
+      if (seq === preferenceLoadSeq.current) preferenceLoading.current = false;
+    }
+  }, [notify]);
+  useEffect(() => {
+    if (desktop) {
+      void loadPreferences();
+      return () => {
+        // StrictMode 清理/卸载：作废在途请求，允许下一次挂载重新读取
+        preferenceLoadSeq.current += 1;
+        preferenceLoading.current = false;
+      };
+    }
+  }, [loadPreferences]);
   useEffect(() => {
     if (!message) return;
     const timer = setTimeout(() => setMessage(""), 6500);
     return () => clearTimeout(timer);
   }, [message]);
+
+  const savePreference = useCallback(
+    async (patch: {
+      mainNavCollapsed?: boolean;
+      readerNavCollapsed?: boolean;
+    }) => {
+      // 入口在加载完成前已禁用；此处兜底，不静默丢弃
+      if (!preferencesLoaded) {
+        notify(
+          preferenceStatus === "error"
+            ? "界面偏好读取失败，本次设置未保存，请先重试读取偏好。"
+            : "正在加载界面偏好，本次设置未保存，请稍后再试。",
+        );
+        return;
+      }
+
+      const current = preferenceSaving.current || Promise.resolve();
+      const next = current.then(async () => {
+        try {
+          await command("save_app_preferences", { patch });
+        } catch (e) {
+          notify(errorMessage(e));
+        }
+      });
+      preferenceSaving.current = next;
+      await next;
+      if (preferenceSaving.current === next) preferenceSaving.current = null;
+    },
+    [preferencesLoaded, preferenceStatus, notify]
+  );
 
   const commitReaderProgress = useCallback(async () => {
     for (const [pid, state] of readerPending.current) {
@@ -174,8 +258,11 @@ export function App() {
       }
     }
   }, []);
-  const flush = useCallback(async (): Promise<boolean> => {
+  const flush = useCallback(async (protectReadingDraft = true): Promise<boolean> => {
     try {
+      // The guard can save through mutate(); run it outside the write queue.
+      if (protectReadingDraft && readingGuard.current && !(await readingGuard.current.flush())) return false;
+      if (protectReadingDraft) await preferenceSaving.current;
       await serialize(async () => {
         await commitReaderProgress();
         const p = projectRef.current;
@@ -203,7 +290,7 @@ export function App() {
   }, [accept, notify, serialize, commitReaderProgress]);
   useEffect(() => {
     if (!projectRef.current || !chapterRef.current) return;
-    const timer = setTimeout(() => void flush(), 1500);
+    const timer = setTimeout(() => void flush(false), 1500);
     return () => clearTimeout(timer);
   }, [body, chapterId, flush]);
   useEffect(() => {
@@ -211,10 +298,10 @@ export function App() {
       const c = projectRef.current?.chapters.find(
         (c) => c.id === chapterRef.current,
       );
-      if (c && bodyRef.current !== c.working) {
+      if ((c && bodyRef.current !== c.working) || readingGuard.current?.dirty()) {
         e.preventDefault();
         e.returnValue = "正文尚未保存";
-        void flush();
+        void flush(false);
       }
     };
     window.addEventListener("beforeunload", handler);
@@ -279,8 +366,9 @@ export function App() {
     });
     setLoading(false);
   };
-  const navigate = async (next: View, cid?: string) => {
-    if (!(await flush())) return;
+  const navigate = async (next: View, cid?: string, commit?: () => void): Promise<boolean> => {
+    if (!(await flush())) return false;
+    commit?.();
     if (cid && cid !== chapterRef.current) {
       chapterRef.current = cid;
       setChapterId(cid);
@@ -292,9 +380,10 @@ export function App() {
       setContext(null);
     }
     setView(next);
+    return true;
   };
   const mutate = async (m: Mutation): Promise<Project | undefined> => {
-    if (!(await flush())) return;
+    if (!(await flush(false))) return;
     return perform(() =>
       serialize(async () => {
         const p = projectRef.current!;
@@ -536,6 +625,7 @@ export function App() {
       />,
     );
   const actions: Actions = {
+    registerReadingGuard,
     mutate,
     notice: notify,
     run: requestRun,
@@ -601,90 +691,115 @@ export function App() {
     [project?.chapters, view === "reader" || view === "home"],
   );
   return (
-    <div className={`app-shell ${view === "reader" ? "reading-shell" : ""}`}>
+    <div className={`app-shell ${view === "reader" ? "reading-shell" : ""} ${mainNavCollapsed ? "nav-collapsed" : ""}`}>
       <aside className="sidebar">
-        <button className="brand" onClick={() => void navigate("home")}>
-          <span className="brand-mark">
-            <Feather size={23} />
-          </span>
-          <span>
-            <strong>叙事</strong>
-            <small>NARRATIVE STUDIO</small>
-          </span>
-        </button>
-        <div className="sidebar-section">
-          <span>创作空间</span>
-          <button
-            className="icon-button"
-            aria-label="新建作品"
-            onClick={create}
-          >
-            <Plus size={17} />
-          </button>
-        </div>
-        <button
-          className={`project-switch ${view === "home" ? "selected" : ""}`}
-          onClick={() => {
-            void navigate("home");
-            void perform(refreshCards);
-          }}
-        >
-          <FolderOpen size={17} />
-          <span>我的作品</span>
-          <ChevronRight size={14} />
-        </button>
-        {project && (
+        {!mainNavCollapsed && (
           <>
-            <div className="current-book">
-              <div className="book-spine" />
-              <div>
-                <strong>{project.title}</strong>
-                <span>
-                  {project.pdfBook
-                    ? "PDF · 原版式阅读"
-                    : `${project.genre} · ${project.chapters.length} 章`}
-                </span>
-              </div>
+            <button className="brand" onClick={() => void navigate("home")}>
+              <span className="brand-mark">
+                <Feather size={23} />
+              </span>
+              <span>
+                <strong>叙事</strong>
+                <small>NARRATIVE STUDIO</small>
+              </span>
+            </button>
+            <div className="sidebar-section">
+              <span>创作空间</span>
+              <button
+                className="icon-button"
+                aria-label="新建作品"
+                onClick={create}
+              >
+                <Plus size={17} />
+              </button>
             </div>
-            <nav>
-              {nav
-                .filter(
-                  (n) =>
-                    !project.pdfBook || ["reader", "settings"].includes(n.id),
-                )
-                .map((n) => (
-                  <button
-                    key={n.id}
-                    className={view === n.id ? "active" : ""}
-                    onClick={() => void navigate(n.id)}
-                  >
-                    <n.icon size={18} />
-                    {n.label}
-                    {n.id === "memory" && pending > 0 && <em>{pending}</em>}
-                  </button>
-                ))}
-            </nav>
+            <button
+              className={`project-switch ${view === "home" ? "selected" : ""}`}
+              onClick={() => {
+                void navigate("home");
+                void perform(refreshCards);
+              }}
+            >
+              <FolderOpen size={17} />
+              <span>我的作品</span>
+              <ChevronRight size={14} />
+            </button>
+            {project && (
+              <>
+                <div className="current-book">
+                  <div className="book-spine" />
+                  <div>
+                    <strong>{project.title}</strong>
+                    <span>
+                      {project.pdfBook
+                        ? "PDF · 原版式阅读"
+                        : `${project.genre} · ${project.chapters.length} 章`}
+                    </span>
+                  </div>
+                </div>
+                <nav>
+                  {nav
+                    .filter(
+                      (n) =>
+                        !project.pdfBook || ["reader", "settings"].includes(n.id),
+                    )
+                    .map((n) => (
+                      <button
+                        key={n.id}
+                        className={view === n.id ? "active" : ""}
+                        disabled={loading}
+                        onClick={() => void navigate(n.id)}
+                      >
+                        <n.icon size={18} />
+                        {n.label}
+                        {n.id === "memory" && pending > 0 && <em>{pending}</em>}
+                      </button>
+                    ))}
+                </nav>
+              </>
+            )}
+            {!project && (
+              <div className="sidebar-welcome">
+                <BookOpen size={34} />
+                <p>
+                  一个故事，一张空白的纸。
+                  <br />
+                  从你的大纲开始。
+                </p>
+              </div>
+            )}
+            <div className="sidebar-bottom">
+              <span>
+                <i className="status-dot" />
+                本地工作空间
+              </span>
+              <small>你的故事，由你决定。</small>
+              <span className="build-version">v{packageJson.version} · Windows</span>
+              <button className="update-entry" onClick={() => setUpdatesOpen(true)}>软件更新</button>
+            </div>
           </>
         )}
-        {!project && (
-          <div className="sidebar-welcome">
-            <BookOpen size={34} />
-            <p>
-              一个故事，一张空白的纸。
-              <br />
-              从你的大纲开始。
-            </p>
-          </div>
-        )}
-        <div className="sidebar-bottom">
-          <span>
-            <i className="status-dot" />
-            本地工作空间
-          </span>
-          <small>你的故事，由你决定。</small>
-          <span className="build-version">v0.3.3 · Windows</span>
-          <button className="update-entry" onClick={() => setUpdatesOpen(true)}>软件更新</button>
-        </div>
+        <button
+          className="nav-collapse-toggle"
+          disabled={!preferencesLoaded}
+          aria-busy={preferenceStatus === "loading"}
+          aria-label={mainNavCollapsed ? "展开主导航" : "折叠主导航"}
+          onClick={() => {
+            const newValue = !mainNavCollapsed;
+            setMainNavCollapsed(newValue);
+            void savePreference({ mainNavCollapsed: newValue });
+          }}
+          title={
+            preferenceStatus === "loading"
+              ? "正在加载界面偏好…"
+              : preferenceStatus === "error"
+                ? "界面偏好读取失败，请先重试读取偏好"
+                : mainNavCollapsed ? "展开主导航" : "折叠主导航"
+          }
+        >
+          {mainNavCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+        </button>
       </aside>
       {updatesOpen && <UpdatesPanel onClose={() => setUpdatesOpen(false)} beforeInstall={flush} />}
       <main className="workspace">
@@ -725,6 +840,22 @@ export function App() {
         {!desktop && (
           <div className="banner">
             这是界面开发预览。请运行桌面程序使用 SQLite、API 和文件功能。
+          </div>
+        )}
+        {desktop && preferenceStatus !== "ready" && preferenceError && (
+          <div className="banner preference-error-banner" role="alert">
+            <span>
+              界面偏好读取失败：{preferenceError}。主导航与阅读导航的折叠切换暂不可用，已有设置未被修改。
+            </span>
+            <button
+              type="button"
+              className="preference-retry"
+              disabled={preferenceStatus === "loading"}
+              aria-busy={preferenceStatus === "loading"}
+              onClick={() => void loadPreferences()}
+            >
+              {preferenceStatus === "loading" ? "正在重试读取偏好…" : "重试读取偏好"}
+            </button>
           </div>
         )}
         {view === "home" ? (
@@ -933,6 +1064,13 @@ export function App() {
                   key={project.id}
                   project={project}
                   actions={actions}
+                  readerNavCollapsed={readerNavCollapsed}
+                  preferencesLoaded={preferencesLoaded}
+                  preferencesFailed={preferenceStatus === "error"}
+                  onReaderNavCollapse={(collapsed) => {
+                    setReaderNavCollapsed(collapsed);
+                    void savePreference({ readerNavCollapsed: collapsed });
+                  }}
                 />
               </Suspense>
             )}
@@ -942,6 +1080,13 @@ export function App() {
                 project={project}
                 chapterId={chapterId}
                 actions={actions}
+                readerNavCollapsed={readerNavCollapsed}
+                preferencesLoaded={preferencesLoaded}
+                preferencesFailed={preferenceStatus === "error"}
+                onReaderNavCollapse={(collapsed) => {
+                  setReaderNavCollapsed(collapsed);
+                  void savePreference({ readerNavCollapsed: collapsed });
+                }}
               />
             )}
             {view === "illustrations" && (

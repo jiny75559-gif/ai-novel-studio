@@ -25,6 +25,9 @@ pub fn export_package(db: &Database, pid: &str, path: &Path) -> Result<()> {
     for id in crate::visual::referenced_media(&p) {
         total += db.media(&id)?.bytes.len() as u64;
     }
+    for id in crate::reader_fonts::references(&p.reader) {
+        total += db.reader_font(&id)?.bytes.len() as u64;
+    }
     if total > MAX_PACKAGE - 1024 * 1024 {
         return Err(AppError::new(
             "TOO_LARGE",
@@ -53,6 +56,12 @@ pub fn export_package(db: &Database, pid: &str, path: &Path) -> Result<()> {
         zip.start_file(format!("media/{id}"), options)
             .map_err(|_| AppError::new("EXPORT_ERROR", "无法写入图片。"))?;
         zip.write_all(&m.bytes)?;
+    }
+    for id in crate::reader_fonts::references(&p.reader) {
+        let font = db.reader_font(&id)?;
+        zip.start_file(format!("fonts/{id}"), options)
+            .map_err(|_| AppError::new("EXPORT_ERROR", "无法写入字体。"))?;
+        zip.write_all(&font.bytes)?;
     }
     zip.finish()
         .map_err(|_| AppError::new("EXPORT_ERROR", "项目包写入失败。"))?;
@@ -184,6 +193,30 @@ pub fn read_package_media(path: &Path, p: &Project) -> Result<Vec<crate::visual:
     }
     Ok(assets)
 }
+pub fn read_package_fonts(
+    path: &Path,
+    p: &Project,
+) -> Result<Vec<crate::reader_fonts::ReaderFontAsset>> {
+    let mut zip = ZipArchive::new(std::fs::File::open(path)?)
+        .map_err(|_| AppError::new("INVALID_PACKAGE", "无法打开项目包。"))?;
+    let mut assets = Vec::new();
+    for id in crate::reader_fonts::references(&p.reader) {
+        let file = zip.by_name(&format!("fonts/{id}")).map_err(|_| {
+            AppError::new(
+                "INVALID_PACKAGE",
+                "备份缺少正文或标题所用字体，请重新导出完整备份。",
+            )
+        })?;
+        let mut bytes = Vec::new();
+        file.take(crate::reader_fonts::MAX_FONT as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        let mut font = crate::reader_fonts::ReaderFontAsset::from_bytes(bytes)?;
+        font.info.id = id;
+        assets.push(font);
+    }
+    Ok(assets)
+}
+
 pub fn remap_project(mut p: Project) -> Result<Project> {
     let mut map = HashMap::new();
     map.insert(p.id.clone(), id());

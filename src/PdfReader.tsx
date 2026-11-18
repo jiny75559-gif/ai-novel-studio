@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   BookmarkPlus,
   ChevronLeft,
@@ -7,7 +13,6 @@ import {
   Maximize2,
   Minimize2,
   ScanLine,
-  Trash2,
   Download,
 } from "lucide-react";
 import {
@@ -20,6 +25,7 @@ import {
 import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import type { Actions } from "./App";
 import type { BookOutline, PdfRect, Project, ReaderState } from "./domain";
+import { withReaderDefaults } from "./domain";
 import { command, errorMessage } from "./bridge";
 import { Button, Modal } from "./components";
 import { ReaderPreferences } from "./ReaderPreferences";
@@ -179,15 +185,25 @@ function PdfPage({
 export function PdfReader({
   project,
   actions,
+  readerNavCollapsed,
+  preferencesLoaded = true,
+  preferencesFailed = false,
+  onReaderNavCollapse,
 }: {
   project: Project;
   actions: Actions;
+  readerNavCollapsed?: boolean;
+  /** 偏好加载完成前禁用导航切换，避免产生无法持久化的操作 */
+  preferencesLoaded?: boolean;
+  /** 偏好读取失败：保持禁用，提示使用重试入口而不是显示“正在加载” */
+  preferencesFailed?: boolean;
+  onReaderNavCollapse?: (collapsed: boolean) => void;
 }) {
-  const [settings, setSettings] = useState<ReaderState>(project.reader),
+  const [settings, setSettings] = useState<ReaderState>(() => withReaderDefaults(project.reader)),
     [doc, setDoc] = useState<PDFDocumentProxy | null>(null),
     [failure, setFailure] = useState(""),
     [index, setIndex] = useState(project.reader.offset),
-    [toc, setToc] = useState(false),
+    [toc, setToc] = useState(readerNavCollapsed !== true),
     [preferences, setPreferences] = useState(false),
     [focus, setFocus] = useState(false),
     [region, setRegion] = useState(false),
@@ -195,7 +211,17 @@ export function PdfReader({
     [outline, setOutline] = useState<BookOutline[]>([]),
     [password, setPassword] = useState<string | null>(null),
     [passwordValue, setPasswordValue] = useState("");
+  const userToggled = useRef(false);
+
+  // 同步迟到的偏好，但不覆盖用户已操作的状态
+  useEffect(() => {
+    if (readerNavCollapsed !== undefined && !userToggled.current) {
+      setToc(!readerNavCollapsed);
+    }
+  }, [readerNavCollapsed]);
   const stage = useRef<HTMLDivElement>(null),
+    scroller = useRef<HTMLDivElement>(null),
+    scrollModeRef = useRef(false),
     panelRef = useRef<HTMLDivElement>(null),
     buttonRef = useRef<HTMLButtonElement>(null),
     saveFn = useRef(actions.saveReader),
@@ -208,7 +234,9 @@ export function PdfReader({
   saved.current = settings;
   const marks = useReadingMarks(project, actions),
     double = settings.layout === "double",
-    step = double ? 2 : 1;
+    step = double ? 2 : 1,
+    scroll = settings.readingMode === "scroll";
+  scrollModeRef.current = scroll;
   const change = (s: Partial<ReaderState>) =>
     setSettings((old) => ({ ...old, ...s }));
   const goto = (_cid: string, offset: number) => {
@@ -354,17 +382,19 @@ export function PdfReader({
     if (!el) return;
     const resize = () =>
       setFit(
-        Math.min(
-          1,
-          Math.max(0.3, (el.clientWidth - 104) / (double ? 860 : 430)),
-          Math.max(0.3, (el.clientHeight - 64) / 640),
-        ),
+        scroll
+          ? Math.min(1, Math.max(0.3, (el.clientWidth - 72) / (double ? 860 : 430)))
+          : Math.min(
+              1,
+              Math.max(0.3, (el.clientWidth - 104) / (double ? 860 : 430)),
+              Math.max(0.3, (el.clientHeight - 64) / 640),
+            ),
       );
     const ro = new ResizeObserver(resize);
     ro.observe(el);
     resize();
     return () => ro.disconnect();
-  }, [double]);
+  }, [double, scroll]);
   useEffect(() => {
     if (!doc) return;
     const n = Math.floor(index / step) * step;
@@ -418,6 +448,16 @@ export function PdfReader({
       )
         return;
       if (e.key === " " && (e.target as HTMLElement)?.closest("button")) return;
+      if (
+        scrollModeRef.current &&
+        ["ArrowDown", "ArrowUp"].includes(e.key) &&
+        scroller.current &&
+        !scroller.current.contains(e.target as Node)
+      ) {
+        e.preventDefault();
+        scroller.current.scrollBy({ top: e.key === "ArrowDown" ? 60 : -60 });
+        return;
+      }
       if (["ArrowRight", "PageDown", " "].includes(e.key)) {
         e.preventDefault();
         turnRef.current(1);
@@ -482,18 +522,131 @@ export function PdfReader({
     progress = doc
       ? Math.min(100, Math.round(((index + step) / doc.numPages) * 100))
       : 0;
+  // ---- REQ-FE-306 PDF 连续滚动：原页纵向虚拟化，offset 保持 0 基原页索引，不存像素 ----
+  const ROW_GAP = 24,
+    SCROLL_HEAD = 24,
+    rowH = (640 + ROW_GAP) * zoom,
+    rows = doc ? Math.ceil(doc.numPages / step) : 0;
+  const [view, setView] = useState({ top: 0, height: 0 });
+  const scrollOrigin = useRef<{
+    index: number;
+    numPages: number;
+    zoom: number;
+    step: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!scroll || !el || !doc || !rows) return;
+    const o = scrollOrigin.current;
+    if (
+      o &&
+      o.index === index &&
+      o.numPages === doc.numPages &&
+      o.zoom === zoom &&
+      o.step === step
+    )
+      return;
+    el.scrollTop = SCROLL_HEAD + Math.floor(index / step) * rowH;
+    scrollOrigin.current = { index, numPages: doc.numPages, zoom, step };
+    setView({ top: el.scrollTop, height: el.clientHeight });
+  }, [scroll, index, doc, zoom, step, rows, rowH]);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!scroll || !el) return;
+    const ro = new ResizeObserver(() =>
+      setView({ top: el.scrollTop, height: el.clientHeight }),
+    );
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [scroll]);
+  const onPdfScroll = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const top = el.scrollTop,
+      height = el.clientHeight;
+    setView({ top, height });
+    if (!doc || !rows) return;
+    const row = Math.max(
+      0,
+      Math.min(
+        rows - 1,
+        Math.floor((top + Math.min(height * 0.3, rowH * 0.5) - SCROLL_HEAD) / rowH),
+      ),
+    );
+    const next = row * step;
+    if (next === index || next >= doc.numPages) return;
+    marks.clear();
+    scrollOrigin.current = { index: next, numPages: doc.numPages, zoom, step };
+    setIndex(next);
+    change({ offset: next });
+  };
+  const firstRow = Math.max(0, Math.floor((view.top - SCROLL_HEAD) / rowH) - 1),
+    lastRow = Math.min(
+      rows - 1,
+      Math.ceil((view.top + view.height - SCROLL_HEAD) / rowH) + 1,
+    ),
+    scrollFoot = Math.max(48, view.height - 640 * zoom),
+    density = Math.min(3, Math.max(1, devicePixelRatio * zoom));
+  const renderSpread = (baseIndex: number) =>
+    doc && (
+      <div
+        className={`book-spread ${double ? "double" : "single"}`}
+        style={{ width, transform: `scale(${zoom})` }}
+      >
+        {[baseIndex + 1, ...(double ? [baseIndex + 2] : [])].map((n) =>
+          n <= doc.numPages ? (
+            <PdfPage
+              key={n}
+              doc={doc}
+              pageNumber={n}
+              density={density}
+              project={project}
+              edit={marks.edit}
+              region={region}
+              onRegion={(r) => {
+                marks.select({
+                  chapterId: "",
+                  start: 0,
+                  end: 0,
+                  quote: `第 ${r.page} 页 · 区域批注`,
+                  pdfRects: [r],
+                });
+                setRegion(false);
+              }}
+            />
+          ) : (
+            <article key="blank" className="book-leaf pdf-leaf" />
+          ),
+        )}
+      </div>
+    );
   return (
     <section className={`reader-view pdf-reader reader-${settings.theme}`}>
       <div className="reader-toolbar">
         <div className="reader-toolbar-start">
           <Button
             variant="ghost"
-            aria-label="目录与书签"
+            aria-label="阅读导航"
             aria-expanded={toc}
-            onClick={() => setToc(!toc)}
+            disabled={!preferencesLoaded}
+            aria-busy={!preferencesLoaded && !preferencesFailed}
+            title={
+              preferencesLoaded
+                ? undefined
+                : preferencesFailed
+                  ? "阅读偏好读取失败，请使用页面上方的“重试读取偏好”"
+                  : "正在加载阅读偏好…"
+            }
+            onClick={() => {
+              if (!preferencesLoaded) return;
+              userToggled.current = true;
+              const next = !toc;
+              setToc(next);
+              onReaderNavCollapse?.(!next);
+            }}
           >
             <List size={17} />
-            目录
+            阅读导航
           </Button>
         </div>
         <div className="reader-heading">
@@ -528,6 +681,12 @@ export function PdfReader({
             goto={goto}
             edit={marks.edit}
             pdfSearch={searchPdf}
+            bookmarks={settings.bookmarks}
+            onBookmarkDelete={(id) =>
+              change({
+                bookmarks: settings.bookmarks.filter((m) => m.id !== id),
+              })
+            }
           >
             <h3>{project.title}</h3>
             <BookContents
@@ -535,24 +694,6 @@ export function PdfReader({
               chapterId={`pdf-${index}`}
               goto={goto}
             />
-            <h3>书签</h3>
-            {settings.bookmarks.map((b) => (
-              <div className="reader-bookmark" key={b.id}>
-                <button onClick={() => goto("", b.offset)}>{b.label}</button>
-                <button
-                  aria-label="删除书签"
-                  onClick={() =>
-                    change({
-                      bookmarks: settings.bookmarks.filter(
-                        (m) => m.id !== b.id,
-                      ),
-                    })
-                  }
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))}
             <Button
               variant="ghost"
               onClick={() =>
@@ -576,62 +717,77 @@ export function PdfReader({
             if (!region) marks.collect(e.currentTarget);
           }}
         >
-          <button
-            className="page-turn turn-left"
-            aria-label="上一页"
-            disabled={!doc || index === 0}
-            onClick={() => turnRef.current(-1)}
-          >
-            <ChevronLeft size={28} />
-          </button>
-          {doc && (
-            <div
-              className="book-zoom-frame"
-              style={{ width: width * zoom, height: 640 * zoom }}
-            >
+          {scroll ? (
+            doc && (
               <div
-                className={`book-spread ${double ? "double" : "single"}`}
-                style={{ width, transform: `scale(${zoom})` }}
+                ref={scroller}
+                className="book-scroll"
+                role="region"
+                aria-label="PDF 连续滚动阅读区"
+                tabIndex={0}
+                onScroll={onPdfScroll}
+                data-rows={rows}
+                data-rendered={rows ? Math.max(0, lastRow - firstRow + 1) : 0}
               >
-                {[index + 1, ...(double ? [index + 2] : [])].map((n) =>
-                  n <= doc.numPages ? (
-                    <PdfPage
-                      key={n}
-                      doc={doc}
-                      pageNumber={n}
-                      density={Math.min(
-                        3,
-                        Math.max(1, devicePixelRatio * zoom),
-                      )}
-                      project={project}
-                      edit={marks.edit}
-                      region={region}
-                      onRegion={(r) => {
-                        marks.select({
-                          chapterId: "",
-                          start: 0,
-                          end: 0,
-                          quote: `第 ${r.page} 页 · 区域批注`,
-                          pdfRects: [r],
-                        });
-                        setRegion(false);
-                      }}
-                    />
-                  ) : (
-                    <article key="blank" className="book-leaf pdf-leaf" />
-                  ),
-                )}
+                <div
+                  className="book-scroll-track"
+                  style={{
+                    height: SCROLL_HEAD + rows * rowH + scrollFoot,
+                    width: width * zoom,
+                  }}
+                >
+                  {rows > 0 &&
+                    Array.from(
+                      { length: Math.max(0, lastRow - firstRow + 1) },
+                      (_, k) => {
+                        const r = firstRow + k;
+                        return (
+                          <div
+                            key={r}
+                            className="book-scroll-row"
+                            data-row={r}
+                            style={{
+                              top: SCROLL_HEAD + r * rowH,
+                              width: width * zoom,
+                              height: 640 * zoom,
+                            }}
+                          >
+                            {renderSpread(r * step)}
+                          </div>
+                        );
+                      },
+                    )}
+                </div>
               </div>
-            </div>
+            )
+          ) : (
+            <>
+              <button
+                className="page-turn turn-left"
+                aria-label="上一页"
+                disabled={!doc || index === 0}
+                onClick={() => turnRef.current(-1)}
+              >
+                <ChevronLeft size={28} />
+              </button>
+              {doc && (
+                <div
+                  className="book-zoom-frame"
+                  style={{ width: width * zoom, height: 640 * zoom }}
+                >
+                  {renderSpread(index)}
+                </div>
+              )}
+              <button
+                className="page-turn turn-right"
+                aria-label="下一页"
+                disabled={!doc || index + step >= doc.numPages}
+                onClick={() => turnRef.current(1)}
+              >
+                <ChevronRight size={28} />
+              </button>
+            </>
           )}
-          <button
-            className="page-turn turn-right"
-            aria-label="下一页"
-            disabled={!doc || index + step >= doc.numPages}
-            onClick={() => turnRef.current(1)}
-          >
-            <ChevronRight size={28} />
-          </button>
           {!doc && (
             <div className="pdf-document-state">
               {failure ? (
@@ -662,11 +818,11 @@ export function PdfReader({
             value={index}
             onChange={(e) => goto("", +e.target.value)}
           />
-          <span>{progress}%</span>
+          <span>全书 {progress}%</span>
           <label>
-            页
+            全书页码
             <input
-              aria-label="跳转页码"
+              aria-label="跳转到全书第几页"
               type="number"
               min="1"
               max={doc?.numPages || 1}
@@ -681,14 +837,18 @@ export function PdfReader({
             />
           </label>
         </div>
-        <span>
-          {doc
-            ? `${index + 1}${double && index + 1 < doc.numPages ? `–${index + 2}` : ""} / ${doc.numPages} 页`
-            : ""}
+        <span className="reader-page-summary">
+          <span className="reader-summary-pages">
+            {doc
+              ? `${index + 1}${double && index + 1 < doc.numPages ? `–${index + 2}` : ""} / ${doc.numPages} 页`
+              : ""}
+          </span>
         </span>
         <div>
           <Button
             variant="ghost"
+            aria-label="添加书签"
+            title="添加书签"
             disabled={!doc}
             onClick={() => {
               change({
@@ -706,11 +866,13 @@ export function PdfReader({
             }}
           >
             <BookmarkPlus size={15} />
-            添加书签
+            <span className="reader-status-label">添加书签</span>
           </Button>
           <Button
             variant="ghost"
             aria-pressed={region}
+            aria-label={region ? "拖动框选 · Esc 取消" : "区域批注"}
+            title={region ? "拖动框选 · Esc 取消" : "区域批注"}
             disabled={!doc}
             onClick={() => {
               marks.clear();
@@ -718,7 +880,9 @@ export function PdfReader({
             }}
           >
             <ScanLine size={15} />
-            {region ? "拖动框选 · Esc 取消" : "区域批注"}
+            <span className="reader-status-label">
+              {region ? "拖动框选 · Esc 取消" : "区域批注"}
+            </span>
           </Button>
         </div>
       </div>

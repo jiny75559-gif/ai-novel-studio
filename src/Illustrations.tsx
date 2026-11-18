@@ -4,12 +4,13 @@ import {
   ImagePlus,
   Plus,
   Settings2,
+  Trash2,
   Upload,
   WandSparkles,
   X,
 } from "lucide-react";
 import type { Actions } from "./App";
-import { command } from "./bridge";
+import { command, errorMessage } from "./bridge";
 import {
   blankImageConfig,
   ImageConfig,
@@ -677,12 +678,24 @@ export function Illustrations({
       {editing && (
         <ImageConfigEditor
           config={editing}
+          existing={configs.some((c) => c.id === editing.id)}
           actions={actions}
           onClose={() => setEditing(null)}
           onSaved={async (c) => {
             await refresh();
             setSettings((s) => ({ ...s, providerId: c.id }));
             setEditing(null);
+          }}
+          onDeleted={async (deletedId) => {
+            // 立即从本地列表移除
+            setConfigs((prev) => prev.filter((c) => c.id !== deletedId));
+            // 如果当前选中的就是被删除的配置,清空选中值
+            setSettings((s) =>
+              s.providerId === deletedId ? { ...s, providerId: "" } : s,
+            );
+            setEditing(null);
+            // 刷新以确保与后端同步
+            await refresh();
           }}
         />
       )}
@@ -831,21 +844,28 @@ function ImageConfigEditor({
   actions,
   onClose,
   onSaved,
+  onDeleted,
+  existing,
 }: {
   config: ImageConfig;
   actions: Actions;
   onClose: () => void;
   onSaved: (c: ImageConfig) => Promise<void>;
+  onDeleted: (id: string) => Promise<void>;
+  existing: boolean;
 }) {
   const [c, setC] = useState(config);
   const [key, setKey] = useState("");
   const [workflow, setWorkflow] = useState(JSON.stringify(c.workflow, null, 2));
   const [references, setReferences] = useState(c.referenceNodes.join(", "));
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const update = <K extends keyof ImageConfig>(k: K, v: ImageConfig[K]) =>
     setC((c) => ({ ...c, [k]: v }));
   const save = async () => {
     setBusy(true);
+    setError("");
     await actions.perform(async () => {
       const parsed = c.mode === "comfyui" ? JSON.parse(workflow) : c.workflow;
       const saved = await command<ImageConfig>("save_image_config", {
@@ -867,6 +887,25 @@ function ImageConfigEditor({
       );
     });
     setBusy(false);
+  };
+  const deleteConfig = async () => {
+    if (!existing) return;
+    setBusy(true);
+    setError("");
+    try {
+      await command("delete_image_config", { configId: c.id });
+      try {
+        await onDeleted(c.id);
+        actions.notice("生图配置已删除。");
+      } catch (refreshError) {
+        // 删除已完成，但列表刷新失败
+        actions.notice("配置已删除，列表刷新失败，建议重新进入此页面。");
+        console.error("刷新生图配置列表失败:", refreshError);
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+      setBusy(false);
+    }
   };
   return (
     <Modal
@@ -1091,12 +1130,54 @@ function ImageConfigEditor({
         </Field>
       </div>
       <footer>
-        <Button onClick={onClose}>取消</Button>
-        <Button variant="primary" busy={busy} onClick={() => void save()}>
-          <Settings2 size={15} />
-          保存生图配置
-        </Button>
+        {existing && !confirmDelete && (
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 size={14} />
+            删除配置
+          </Button>
+        )}
+        {confirmDelete && (
+          <>
+            <Button
+              variant="danger"
+              busy={busy}
+              onClick={() => void deleteConfig()}
+            >
+              确认删除
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() => {
+                setConfirmDelete(false);
+                setError("");
+              }}
+            >
+              取消删除
+            </Button>
+          </>
+        )}
+        <span className="spacer" />
+        {!confirmDelete && (
+          <>
+            <Button disabled={busy} onClick={onClose}>
+              取消
+            </Button>
+            <Button variant="primary" busy={busy} onClick={() => void save()}>
+              <Settings2 size={15} />
+              保存生图配置
+            </Button>
+          </>
+        )}
       </footer>
+      {error && (
+        <p className="inline-note" role="alert">
+          {error}
+        </p>
+      )}
     </Modal>
   );
 }

@@ -30,7 +30,7 @@ try {
     url = "https://github.com/$Repository/releases/download/v$version/$smallName"
     sha256 = (Get-FileHash -LiteralPath $small -Algorithm SHA256).Hash.ToLowerInvariant()
     size = (Get-Item -LiteralPath $small).Length
-    notes = '改进生成预算与超时提醒；增加 HTML、FB2、RTF、ODT、CBZ 阅读；支持签名校验的一键在线与本地更新。'
+    notes = '改进阅读器：全书页码和跳页、连续滚动、批注编辑、自定义字体及短窗口布局。完善模型设置与生图配置的保存和删除提示。'
   }
   $manifestPath = Join-Path $releaseDir 'update-manifest.json'
   $utf8 = New-Object System.Text.UTF8Encoding($false)

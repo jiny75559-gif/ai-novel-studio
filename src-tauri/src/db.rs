@@ -9,7 +9,10 @@ const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,title TEXT NOT NULL,revision INTEGER NOT NULL,data TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS chapters(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id));
+CREATE TABLE IF NOT EXISTS app_preferences(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reader_state(project_id TEXT PRIMARY KEY REFERENCES projects(id),data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS reader_fonts(id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,data TEXT NOT NULL,bytes BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS reader_fonts_hash ON reader_fonts(sha256);
 CREATE TABLE IF NOT EXISTS book_metadata(project_id TEXT PRIMARY KEY REFERENCES projects(id),document_id TEXT);
 CREATE TABLE IF NOT EXISTS chapter_versions(id TEXT PRIMARY KEY,chapter_id TEXT NOT NULL REFERENCES chapters(id),version_no INTEGER NOT NULL,content TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(chapter_id,version_no));
 CREATE TRIGGER IF NOT EXISTS immutable_version_update BEFORE UPDATE ON chapter_versions BEGIN SELECT RAISE(ABORT,'immutable chapter version'); END;
@@ -40,7 +43,18 @@ impl Database {
         tx.commit()?;
         let db = Self(Mutex::new(c));
         db.seed_writing_presets()?;
-        for mut run in db.list_runs(None)? {
+        // Recovery must scan active tasks, not the paginated UI history. An older
+        // running task would otherwise keep the unique writer lock after restart.
+        let active_ids = {
+            let conn = db.lock()?;
+            let mut statement = conn.prepare("SELECT id FROM runs WHERE status='running'")?;
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            ids
+        };
+        for rid in active_ids {
+            let mut run = db.run(&rid)?;
             if run.status == "running" {
                 run.status = "interrupted".into();
                 run.error = Some(AppError::new(
@@ -92,6 +106,7 @@ impl Database {
     }
     pub(crate) fn persist(c: &Connection, p: &mut Project) -> Result<()> {
         p.validate()?;
+        Self::validate_reader_fonts_conn(c, &p.reader)?;
         let previous = p.revision;
         p.revision += 1;
         p.updated_at = now();
@@ -127,8 +142,16 @@ impl Database {
     }
     pub fn create_with_media(
         &self,
+        p: Project,
+        assets: &[crate::visual::Media],
+    ) -> Result<Project> {
+        self.create_with_assets(p, assets, &[])
+    }
+    pub fn create_with_assets(
+        &self,
         mut p: Project,
         assets: &[crate::visual::Media],
+        fonts: &[crate::reader_fonts::ReaderFontAsset],
     ) -> Result<Project> {
         p.validate()?;
         let mut c = self.lock()?;
@@ -136,7 +159,11 @@ impl Database {
         for asset in assets {
             Self::store_media_conn(&tx, asset)?;
         }
+        for font in fonts {
+            Self::store_reader_font_conn(&tx, font)?;
+        }
         Self::validate_media_conn(&tx, &p)?;
+        Self::validate_reader_fonts_conn(&tx, &p.reader)?;
         p.revision = 1;
         let mut stored = p.clone();
         for ch in &mut stored.chapters {
@@ -248,6 +275,7 @@ impl Database {
             }
         }
         state.validate(&p)?;
+        Self::validate_reader_fonts_conn(&c, &state)?;
         state.last_read_at = now();
         c.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data",params![pid,serde_json::to_string(&state)?])?;
         Ok(state)
@@ -278,7 +306,7 @@ impl Database {
             c.execute("UPDATE projects SET deleted=0 WHERE id=?", [pid])?;
         } else {
             let active: i64 = c.query_row(
-                "SELECT COUNT(*) FROM runs WHERE project_id=? AND status='running'",
+                "SELECT (SELECT COUNT(*) FROM runs WHERE project_id=?1 AND status='running') + (SELECT COUNT(*) FROM image_jobs WHERE project_id=?1 AND status='running')",
                 [pid],
                 |r| r.get(0),
             )?;
@@ -444,17 +472,21 @@ impl Database {
         Ok(())
     }
     pub fn remove_provider(&self, pid: &str) -> Result<()> {
-        for v in self.list_projects(false)? {
-            let p = self.load(v["id"].as_str().unwrap_or_default())?;
-            if p.settings.writer_id == pid || p.settings.reviewer_id == pid {
-                return Err(AppError::new(
-                    "MODEL_IN_USE",
-                    "该模型仍被项目使用。请先更换主/副模型。",
-                ));
-            }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let used: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE json_extract(data,'$.settings.writerId')=?1 OR json_extract(data,'$.settings.reviewerId')=?1) OR EXISTS(SELECT 1 FROM runs WHERE status='running' AND json_extract(data,'$.snapshot.provider.id')=?1)",
+            [pid],
+            |row| row.get(0),
+        )?;
+        if used {
+            return Err(AppError::new(
+                "MODEL_IN_USE",
+                "该模型仍被作品（包括回收站）或运行任务使用。请先更换相关作品的主/副模型，并等待或取消任务；回收站作品需先恢复。",
+            ));
         }
-        self.lock()?
-            .execute("DELETE FROM model_configs WHERE id=?", [pid])?;
+        tx.execute("DELETE FROM model_configs WHERE id=?", [pid])?;
+        tx.commit()?;
         Ok(())
     }
     fn read_run(conn: &Connection, rid: &str) -> Result<Run> {

@@ -505,8 +505,21 @@ impl Database {
         Ok(())
     }
     pub fn delete_image_config(&self, id: &str) -> Result<()> {
-        self.lock()?
-            .execute("DELETE FROM image_configs WHERE id=?", [id])?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let used: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE json_extract(data,'$.visualSettings.providerId')=?1) OR EXISTS(SELECT 1 FROM image_jobs WHERE status='running' AND json_extract(data,'$.config.id')=?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if used {
+            return Err(AppError::new(
+                "MODEL_IN_USE",
+                "该生图服务仍被作品（包括回收站）或运行任务使用。请先更换相关作品的生图服务，并等待或取消任务；回收站作品需先恢复。",
+            ));
+        }
+        tx.execute("DELETE FROM image_configs WHERE id=?", [id])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn media(&self, id: &str) -> Result<Media> {
